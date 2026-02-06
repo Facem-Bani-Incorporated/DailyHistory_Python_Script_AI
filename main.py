@@ -163,8 +163,10 @@ async def main():
                 secondary_events=secondary_objs
             )
 
-            await send_to_java(payload)
-            logger.info("✅ Pipeline terminat și trimis la Java!")
+           # await send_to_java(payload)
+           # logger.info("✅ Pipeline terminat și trimis la Java!")
+            logger.info("⚠️ Java Delivery ignorat (Backend nefinalizat).")
+            logger.info("✅ Pipeline terminat cu succes local!")
             await log_to_db(status="SUCCESS", year=current_main_year, score=current_score)
         except Exception as e:
             await log_to_db("JAVA_DELIVERY_ERROR", year=current_main_year, error=str(e))
