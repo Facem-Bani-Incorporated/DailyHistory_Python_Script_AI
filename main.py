@@ -5,7 +5,8 @@ from datetime import datetime
 from sqlalchemy import text
 from core.logger import setup_logger
 from core.config import config
-from core.database import engine, AsyncSessionLocal, IngestionLog
+# Importăm și noul model ProcessedEvent pentru arhivare
+from core.database import engine, AsyncSessionLocal, IngestionLog, ProcessedEvent
 from engine.scraper import WikiScraper
 from engine.processor import AIProcessor
 from engine.ranker import ScoringEngine
@@ -15,9 +16,9 @@ from tenacity import retry, stop_after_attempt, wait_fixed
 logger = setup_logger("MainPipeline")
 
 
-# --- FUNCȚIA DE SALVARE ÎN DB (PYTHON SIDE) ---
+# --- FUNCȚIA DE SALVARE LOGURI (AUDIT) ---
 async def log_to_db(status: str, year: int = None, score: float = None, error: str = None):
-    """Salvează rezultatul execuției în PostgreSQL."""
+    """Salvează rezultatul execuției (succes/eroare) în PostgreSQL."""
     if engine is None:
         logger.warning("⚠️ DB Engine neconfigurat, se sare peste logging.")
         return
@@ -29,7 +30,7 @@ async def log_to_db(status: str, year: int = None, score: float = None, error: s
                     main_event_year=year,
                     status=status,
                     impact_score=score,
-                    error_message=error[:500] if error else None  # Limităm eroarea pentru DB
+                    error_message=error[:500] if error else None
                 )
                 session.add(new_log)
             await session.commit()
@@ -38,7 +39,32 @@ async def log_to_db(status: str, year: int = None, score: float = None, error: s
         logger.error(f"❌ Nu s-a putut salva log-ul în DB: {e}")
 
 
-# --- FUNCȚIA DE TRANSMISIE CĂTRE JAVA ---
+# --- NOUA FUNCȚIE DE ARHIVARE CONȚINUT (DATE REALE) ---
+async def save_event_content(payload: DailyPayload):
+    """Salvează efectiv textele traduse și link-urile pozelor în DB."""
+    if engine is None: return
+
+    try:
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                main = payload.main_event
+                new_entry = ProcessedEvent(
+                    event_date=payload.date_processed,
+                    year=main.year,
+                    titles=main.title_translations,
+                    narrative=main.narrative_translations,
+                    image_url=main.gallery[0] if main.gallery else None,
+                    impact_score=main.impact_score,
+                    source_url=main.source_url
+                )
+                session.add(new_entry)
+            await session.commit()
+        logger.info(f"🏛️ Conținutul evenimentului din {main.year} a fost ARHIVAT în DB.")
+    except Exception as e:
+        logger.error(f"❌ Eroare la arhivarea conținutului: {e}")
+
+
+# --- FUNCȚIA DE TRANSMISIE CĂTRE JAVA (COMENTATĂ ÎN MAIN) ---
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(5))
 async def send_to_java(payload: DailyPayload):
     headers = {
@@ -55,129 +81,116 @@ async def send_to_java(payload: DailyPayload):
         return response.status_code
 
 
+# --- PIPELINE-UL PRINCIPAL ---
 async def main():
-    logger.info("🚀 Pornire Pipeline cu Database Logging...")
+    logger.info("🚀 Pornire Pipeline cu Arhivare Locală...")
 
-    # 0. Inițializare Tabele (Doar dacă nu există)
+    # 0. Sincronizare Tabele
     try:
         from core.database import init_db
         await init_db()
     except Exception as e:
-        logger.error(f"❌ Eroare fatală la inițializarea DB: {e}")
-        # Nu ne oprim aici, dar logăm problema
+        logger.error(f"❌ Eroare init DB: {e}")
 
-    # Init variabile pentru logging
     current_main_year = None
     current_score = None
 
     try:
         # 1. SETUP MODULE
-        try:
-            scraper = WikiScraper()
-            processor = AIProcessor()
-            ranker = ScoringEngine()
-            logger.info("⚙️ Module inițializate.")
-        except Exception as e:
-            await log_to_db("INIT_ERROR", error=str(e))
-            raise
+        scraper = WikiScraper()
+        processor = AIProcessor()
+        ranker = ScoringEngine()
+        logger.info("⚙️ Module inițializate.")
 
-        # 2. FETCH & HEURISTIC RANK
-        try:
-            raw_events = await scraper.fetch_today()
-            if not raw_events:
-                raise ValueError("Wikipedia nu a returnat evenimente.")
+        # 2. FETCH & RANK
+        raw_events = await scraper.fetch_today()
+        if not raw_events:
+            raise ValueError("Nu s-au găsit evenimente pe Wikipedia.")
 
-            for item in raw_events:
-                item['h_score'] = ranker.heuristic_score(item)
+        for item in raw_events:
+            item['h_score'] = ranker.heuristic_score(item)
 
-            candidates = sorted(raw_events, key=lambda x: x['h_score'], reverse=True)[:50]
-            logger.info(f"📚 Preluat {len(candidates)} candidați.")
-        except Exception as e:
-            await log_to_db("SCRAPER_ERROR", error=str(e))
-            raise
+        candidates = sorted(raw_events, key=lambda x: x['h_score'], reverse=True)[:50]
+        logger.info(f"📚 Preluat {len(candidates)} candidați.")
 
-        # 3. AI SCORING
-        try:
-            ai_data = await processor.batch_score_and_translate_titles(candidates)
-            for idx, item in enumerate(candidates):
-                res = ai_data['results'].get(f"ID_{idx}", {"score": 50, "titles": {}})
-                item['final_score'] = ranker.hybrid_calculate(item['h_score'], res['score'])
-                item['titles'] = res['titles']
+        # 3. AI SCORING & TRANSLATION
+        ai_data = await processor.batch_score_and_translate_titles(candidates)
+        for idx, item in enumerate(candidates):
+            res = ai_data['results'].get(f"ID_{idx}", {"score": 50, "titles": {}})
+            item['final_score'] = ranker.hybrid_calculate(item['h_score'], res['score'])
+            item['titles'] = res['titles']
 
-            candidates.sort(key=lambda x: x['final_score'], reverse=True)
-            top_data = candidates[0]
-            current_main_year = top_data['year']
-            current_score = top_data['final_score']
-            logger.info(f"🤖 AI Scoring gata pentru anul {current_main_year}.")
-        except Exception as e:
-            await log_to_db("AI_SCORING_ERROR", error=str(e))
-            raise
+        candidates.sort(key=lambda x: x['final_score'], reverse=True)
+        top_data = candidates[0]
+        current_main_year = top_data['year']
+        current_score = top_data['final_score']
+        logger.info(f"🤖 AI Scoring gata pentru anul {current_main_year}.")
 
-        # 4. CONTENT & MEDIA
-        try:
-            main_content = await processor.generate_multilingual_main_event(top_data['text'], top_data['year'])
+        # 4. MEDIA CONTENT (CLOUDINARY)
+        main_content = await processor.generate_multilingual_main_event(top_data['text'], top_data['year'])
+        p_main = top_data.get("pages", [])
+        slug_main = p_main[0].get("titles", {}).get("canonical") if p_main else "history"
 
-            p_main = top_data.get("pages", [])
-            slug_main = p_main[0].get("titles", {}).get("canonical") if p_main else "history"
+        wiki_imgs = await scraper.fetch_gallery_urls(slug_main, limit=3)
+        main_gallery = [scraper.upload_to_cloudinary(url, f"main_{top_data['year']}_{i}") for i, url in
+                        enumerate(wiki_imgs)]
+        logger.info("🖼️ Media urcată pe Cloudinary.")
 
-            wiki_imgs = await scraper.fetch_gallery_urls(slug_main, limit=3)
-            main_gallery = [scraper.upload_to_cloudinary(url, f"main_{top_data['year']}_{i}") for i, url in
-                            enumerate(wiki_imgs)]
-            logger.info("🖼️ Media urcată pe Cloudinary.")
-        except Exception as e:
-            await log_to_db("MEDIA_CONTENT_ERROR", year=current_main_year, error=str(e))
-            raise
+        # 5. SECONDARY EVENTS & PAYLOAD
+        secondary_objs = []
+        for idx, item in enumerate(candidates[1:6]):
+            p_sec = item.get("pages", [])
+            slug_sec = p_sec[0].get("titles", {}).get("canonical") if p_sec else ""
+            thumb = None
+            if slug_sec:
+                imgs_sec = await scraper.fetch_gallery_urls(slug_sec, limit=1)
+                if imgs_sec:
+                    thumb = scraper.upload_to_cloudinary(imgs_sec[0], f"sec_{item['year']}_{idx}")
 
-        # 5. SECONDARY & PAYLOAD
-        try:
-            secondary_objs = []
-            for idx, item in enumerate(candidates[1:6]):
-                p_sec = item.get("pages", [])
-                slug_sec = p_sec[0].get("titles", {}).get("canonical") if p_sec else ""
-                thumb = None
-                if slug_sec:
-                    imgs_sec = await scraper.fetch_gallery_urls(slug_sec, limit=1)
-                    if imgs_sec:
-                        thumb = scraper.upload_to_cloudinary(imgs_sec[0], f"sec_{item['year']}_{idx}")
+            secondary_objs.append(SecondaryEvent(
+                title_translations=item['titles'],
+                year=item['year'],
+                source_url=f"https://en.wikipedia.org/wiki/{slug_sec}",
+                ai_relevance_score=item['final_score'],
+                thumbnail_url=thumb
+            ))
 
-                secondary_objs.append(SecondaryEvent(
-                    title_translations=item['titles'],
-                    year=item['year'],
-                    source_url=f"https://en.wikipedia.org/wiki/{slug_sec}",
-                    ai_relevance_score=item['final_score'],
-                    thumbnail_url=thumb
-                ))
+        payload = DailyPayload(
+            date_processed=datetime.now().date(),
+            api_secret=config.INTERNAL_API_SECRET,
+            main_event=MainEvent(
+                title_translations=main_content['titles'],
+                year=top_data['year'],
+                source_url=f"https://en.wikipedia.org/wiki/{slug_main}",
+                event_date=datetime.now().date(),
+                narrative_translations=main_content['narratives'],
+                impact_score=top_data['final_score'],
+                gallery=[img for img in main_gallery if img]
+            ),
+            secondary_events=secondary_objs
+        )
 
-            payload = DailyPayload(
-                date_processed=datetime.now().date(),
-                api_secret=config.INTERNAL_API_SECRET,
-                main_event=MainEvent(
-                    title_translations=main_content['titles'],
-                    year=top_data['year'],
-                    source_url=f"https://en.wikipedia.org/wiki/{slug_main}",
-                    event_date=datetime.now().date(),
-                    narrative_translations=main_content['narratives'],
-                    impact_score=top_data['final_score'],
-                    gallery=[img for img in main_gallery if img]
-                ),
-                secondary_events=secondary_objs
-            )
+        # --- SALVARE DATE ---
+        # Salvăm conținutul complet în baza de date locală
+        await save_event_content(payload)
 
-           # await send_to_java(payload)
-           # logger.info("✅ Pipeline terminat și trimis la Java!")
-            logger.info("⚠️ Java Delivery ignorat (Backend nefinalizat).")
-            logger.info("✅ Pipeline terminat cu succes local!")
-            await log_to_db(status="SUCCESS", year=current_main_year, score=current_score)
-        except Exception as e:
-            await log_to_db("JAVA_DELIVERY_ERROR", year=current_main_year, error=str(e))
-            raise
+        # Java Bridge - COMENTAT
+        # await send_to_java(payload)
+        # logger.info("✅ Trimis către Java!")
+
+        logger.info("⚠️ Java Bridge ignorat (Simulare). Datele sunt în DB.")
+        await log_to_db(status="SUCCESS", year=current_main_year, score=current_score)
+        logger.info("✨ Pipeline finalizat cu succes!")
 
     except Exception as e:
-        logger.error(f"🚨 Pipeline crashed: {e}")
+        error_msg = str(e)
+        logger.error(f"🚨 Pipeline Crash: {error_msg}")
+        await log_to_db(status="ERROR", year=current_main_year, error=error_msg)
 
     finally:
         if engine:
             await engine.dispose()
+            logger.info("🔌 Conexiune DB închisă.")
 
 
 if __name__ == "__main__":
