@@ -17,26 +17,31 @@ logger = setup_logger("MainPipeline")
 
 
 # --- FUNCȚIA DE SALVARE LOGURI (AUDIT) ---
-async def log_to_db(status: str, year: int = None, score: float = None, error: str = None):
-    """Salvează rezultatul execuției (succes/eroare) în PostgreSQL."""
-    if engine is None:
-        logger.warning("⚠️ DB Engine neconfigurat, se sare peste logging.")
-        return
+async def save_event_content(payload: DailyPayload):
+    """Salvează conținutul evenimentului principal în tabelul processed_events."""
+    if engine is None: return
 
     try:
         async with AsyncSessionLocal() as session:
             async with session.begin():
-                new_log = IngestionLog(
-                    main_event_year=year,
-                    status=status,
-                    impact_score=score,
-                    error_message=error[:500] if error else None
+                main = payload.main_event
+
+                # Convertim obiectele Pydantic (Translations) în dicționare JSON
+                new_entry = ProcessedEvent(
+                    event_date=payload.date_processed,
+                    year=main.year,
+                    # AICI E CHEIA: .model_dump() transformă obiectul în JSON serializabil
+                    titles=main.title_translations.model_dump(),
+                    narrative=main.narrative_translations.model_dump(),
+                    image_url=main.gallery[0] if main.gallery else None,
+                    impact_score=main.impact_score,
+                    source_url=main.source_url
                 )
-                session.add(new_log)
+                session.add(new_entry)
             await session.commit()
-        logger.info(f"📊 Status [{status}] salvat în baza de date.")
+        logger.info(f"🏛️ Conținutul evenimentului din {main.year} a fost ARHIVAT în DB.")
     except Exception as e:
-        logger.error(f"❌ Nu s-a putut salva log-ul în DB: {e}")
+        logger.error(f"❌ Eroare la arhivarea conținutului: {e}")
 
 
 # --- NOUA FUNCȚIE DE ARHIVARE CONȚINUT (DATE REALE) ---
