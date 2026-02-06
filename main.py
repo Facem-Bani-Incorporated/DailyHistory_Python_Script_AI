@@ -1,6 +1,7 @@
 import asyncio
 import os
 import httpx
+import json  # Adăugat pentru printarea frumoasă a JSON-ului
 from datetime import datetime
 from sqlalchemy import text
 from core.logger import setup_logger
@@ -68,7 +69,6 @@ async def send_to_java(payload: DailyPayload):
         "Content-Type": "application/json"
     }
 
-    # Folosim model_dump(mode='json') pentru a asigura serializarea corectă a datelor/obiectelor
     payload_json = payload.model_dump(mode='json')
 
     async with httpx.AsyncClient(timeout=120.0) as client:
@@ -169,6 +169,14 @@ async def main():
             ),
             secondary_events=secondary_objs
         )
+
+        # --- LOGGING PAYLOAD ÎNAINTE DE TRANSMISIE ---
+        payload_preview = payload.model_dump(mode='json')
+        print("\n" + "="*50)
+        print("🔍 INSPECTOR PAYLOAD (Ce pleacă spre Sergiu):")
+        print("-" * 50)
+        print(json.dumps(payload_preview, indent=4, ensure_ascii=False))
+        print("="*50 + "\n")
 
         # PASUL FINAL: TRANSMISIE & BACKUP
         await save_event_content(payload)  # Backup local
