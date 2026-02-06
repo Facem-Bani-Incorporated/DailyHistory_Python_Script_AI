@@ -28,12 +28,18 @@ class Settings(BaseSettings):
     @field_validator("DATABASE_URL", mode="before")
     @classmethod
     def fix_postgres_protocol(cls, v: Optional[str]) -> Optional[str]:
-        """
-        Railway oferă implicit 'postgres://'.
-        SQLAlchemy + asyncpg au nevoie de 'postgresql+asyncpg://'.
-        """
-        if v and v.startswith("postgres://"):
-            return v.replace("postgres://", "postgresql+asyncpg://", 1)
+        if not v:
+            return v
+
+        # 1. Reparăm prefixul pentru asincron
+        if v.startswith("postgres://"):
+            v = v.replace("postgres://", "postgresql+asyncpg://", 1)
+        elif v.startswith("postgresql://"):
+            v = v.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+        # 2. Securitate: Eliminăm orice spații accidentale
+        v = v.strip()
+
         return v
 
 config = Settings()
