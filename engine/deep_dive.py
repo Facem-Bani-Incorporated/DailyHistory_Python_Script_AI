@@ -39,40 +39,39 @@ LANG_NAMES = {
 
 # ── Length ─────────────────────────────────────────────────────────────
 # `_word_count` totals the chapters plus the misconception and aftermath sections, and
-# the app divides exactly that by 200 to print the reading time. The long read is sold
-# as a 7 to 8 minute read, so it has to land between 1300 and 1700 words, which leaves
-# the chapters themselves carrying roughly 220 fewer.
+# the app divides exactly that by 200 to print the reading time. The long read is a 4 to
+# 4.5 minute read, so it lands between 750 and 1050 words, with the chapters carrying
+# roughly 220 fewer than that.
 #
-# The floor was 700 until Sept 2026 and almost nothing was ever retried for length: the
-# 09-07 run shipped long reads of 754, 754, 1018, 1037 and 1364 words, a 4 to 7 minute
-# read against a subscription sold on 7 to 8. It now sits just under the ask, so a short
-# piece costs a retry instead of passing silently.
-#
-# Being under the floor still never loses the piece. An earlier, stricter bar discarded
-# whole finished articles for falling a paragraph short (three at 887, 909 and 981 words
-# on 2026-09-02), and losing the long read costs the event far more than its length
-# does. `_generate_english` keeps the longest of the failed attempts and ships it, so
-# the floor buys retries without ever being able to throw the work away.
-MIN_WORDS = 1300          # under this, retry for length — but never discard
-MAX_WORDS = 1900          # over this it is padding, not prose → retry
+# What PRO buys here is density, not duration. The tier was briefly pushed to 1300-1900
+# words on the theory that a subscription should buy a longer article, and the result
+# read as padded: more paragraphs saying the same things the free piece already said.
+# The weight now sits in the highlights, which are the part a subscriber actually reads
+# first, and the chapters only explain what will not fit in one.
+MIN_WORDS = 750           # under this, retry for length — but never discard
+MAX_WORDS = 1050          # over this it is padding, not prose → retry
 
 # What the prompt asks of the chapters alone. The top of the band sits below MAX_WORDS
 # by about what the misconception and aftermath sections add.
-CHAPTER_WORDS_MIN = 1200
-CHAPTER_WORDS_MAX = 1450
+CHAPTER_WORDS_MIN = 550
+CHAPTER_WORDS_MAX = 700
 
 # Marks the one validation failure that is a matter of degree rather than of kind. A
 # short article is still an article; a missing misconception or an invented URL is not.
 TOO_SHORT = "Too short"
 MIN_CHAPTERS = 4
-MAX_CHAPTERS = 7
+MAX_CHAPTERS = 5
 MIN_CHAPTER_WORDS = 80
-# Points of interest shown above the article. Enough to be worth a glance, few enough
-# that they stay points rather than becoming a second article.
-MIN_HIGHLIGHTS = 3
-MAX_HIGHLIGHTS = 5
+# Points of interest shown above the article, and the part of the long read a subscriber
+# reads first. They carry the facts now: 3-5 of them left the prose doing work a list
+# does better, so the count went up as the chapters came down.
+MIN_HIGHLIGHTS = 6
+MAX_HIGHLIGHTS = 8
 MIN_SOURCES = 3
-TEASER_WORDS = 70         # opening words shipped to free users as the pitch
+# Opening words of chapter one, shipped to free users as the pitch. It was 70, which is
+# most of a 150-word chapter: a subscriber opening the long read would have already read
+# half of its first chapter for free.
+TEASER_WORDS = 45
 MAX_OVERLAP = 0.12        # 8-gram overlap with the free narrative
 
 BAD_MARKERS = [
@@ -209,25 +208,32 @@ class DeepDiveGenerator:
         # Truncated because only its shape and angle matter, not its full text.
         avoid_block = ""
         if short_narrative:
+            # Handed over whole. It used to be truncated at 1400 characters because only
+            # its shape mattered; now the no-repeat rule is the point of the tier, and
+            # the free piece is ~400 words, so the model gets all of it.
             avoid_block = f"""
-ALREADY PUBLISHED — DO NOT REPEAT THIS PIECE:
+ALREADY PUBLISHED — DO NOT REPEAT ANY OF THIS:
 \"\"\"
-{short_narrative[:1400]}
+{short_narrative}
 \"\"\"
-The article above is what every reader already got for free. Yours is the second,
-longer piece for paying subscribers. Open on a DIFFERENT hook. Take a DIFFERENT angle.
-Do not reuse its opening image, its closing line, or its best fact. If the free piece
-covered the moment itself, you cover the machinery behind it and what came after.
-A subscriber reading both must feel they received two different articles.
+That is the entire free article, and every reader has already had it. Yours is what the
+subscription buys, so it is worth reading only where it goes past that piece. Every
+highlight and every chapter must carry something the article above does not: a figure it
+did not quote, a mechanism it only named, a person it skipped, what happened next that it
+never reached. Do not reuse its opening, its closing line or its best fact. If a sentence
+of yours would not surprise someone who just read it, cut the sentence.
 """
 
         return f"""
-You are writing the long-form piece for subscribers of a history app — the kind of
-article someone reads to the end on a Sunday morning and then tells someone about.
-ONE event, {CHAPTER_WORDS_MIN} to {CHAPTER_WORDS_MAX} words across the chapters. With the
-misconception and aftermath sections that comes to the 7 to 8 minute read the subscription
-promises. Under {CHAPTER_WORDS_MIN} it is not a long read, over {CHAPTER_WORDS_MAX} it is
-padding. Write in English.
+You are writing the subscriber piece for a history app. What the subscription buys is
+DENSITY, not length: more facts, more specifics, more of what the free article had no room
+for, in fewer words than a general-interest feature would take. Somebody who pays should
+finish it knowing things nobody else knows, not having read for longer.
+
+ONE event, {CHAPTER_WORDS_MIN} to {CHAPTER_WORDS_MAX} words across the chapters. That is
+short on purpose. The highlights carry the facts; the chapters exist to explain the things
+a highlight cannot hold. Over {CHAPTER_WORDS_MAX} you are padding, and padding is the one
+thing a subscriber notices. Write in English.
 
 EVENT: {year} — {text}
 WIKIPEDIA: {slug}
@@ -236,15 +242,24 @@ LOCATION: {location}
 {avoid_block}
 WHAT TO PRODUCE:
 
-1. CHAPTERS — {MIN_CHAPTERS} to {MAX_CHAPTERS} of them, each with a real title and at least
-   {MIN_CHAPTER_WORDS} words. Titles are hooks, not labels: "The Order That Was Never Sent",
-   not "Background". Each chapter does distinct work — set-up, mechanism, the moment,
-   the people, the consequence. Never summarize the previous chapter.
+1. CHAPTERS — {MIN_CHAPTERS} to {MAX_CHAPTERS} of them, each with a real title and around
+   150 words. Titles are hooks, not labels: "The Order That Was Never Sent", not
+   "Background". Each chapter does distinct work — the mechanism, the moment, the people,
+   the consequence. Never summarize the previous chapter, and never restate a highlight:
+   if a fact fits in a highlight it belongs there, and the chapter takes what needs
+   explaining instead. A chapter that could be replaced by its own first sentence is one
+   chapter too many, so write four good ones rather than five thin ones.
 
-2. HIGHLIGHTS — {MIN_HIGHLIGHTS} to {MAX_HIGHLIGHTS} points of interest, read BEFORE the article as
-   the reason to bother with it. Each is {{"label": "...", "text": "..."}}: a 2-5 word label
-   and 25-45 words under it. One concrete fact, number, name or scene each — never a
-   summary of the chapter it came from.
+2. HIGHLIGHTS — {MIN_HIGHLIGHTS} to {MAX_HIGHLIGHTS} of them, and the most important thing
+   you produce. They sit above the article and they are what a subscriber reads first, so
+   they carry the facts rather than advertising them. Each is
+   {{"label": "...", "text": "..."}}: a 2-5 word label and 25-45 words under it.
+
+   Every single one must contain something the free article did not say. A figure it did
+   not quote, a name it skipped, a mechanism it only mentioned, a consequence it never
+   reached. One concrete fact, number or document each, never a summary of a chapter, and
+   never two highlights making the same point from different sides. If you cannot find
+   {MIN_HIGHLIGHTS} things the free piece left out, you have not read it closely enough.
 
    THE LABELS DEPEND ON WHAT KIND OF EVENT THIS IS. Choose them yourself to fit the
    subject; do not reuse a fixed set. What a reader wants to know about a person is not
@@ -289,10 +304,11 @@ HOW TO WRITE IT:
 - Name real people. Quote them only when you know the actual words.
 - Explain mechanisms in plain language — the engineering, the law, the politics.
   The explanation should be the most satisfying part, never a chore.
-- Dry, intelligent irony where the material earns it. A genuinely funny line once or
-  twice in the whole piece, never forced onto tragedy.
 - Vary paragraph and sentence length. If a sentence is boring, cut it.
 - No headers inside chapter bodies. Paragraphs separated by blank lines.
+- At this length every paragraph has to earn its place against a highlight. Before you
+  keep one, ask whether the same fact would land harder as a highlight, and if it would,
+  move it there.
 
 PUNCTUATION, and this one is not negotiable:
 NEVER use a dash as punctuation. No em dash, no en dash, no " - " standing in for a

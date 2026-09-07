@@ -23,14 +23,13 @@ _RETRY_AFTER_RE = re.compile(
     r"try again in (?:(\d+)h)?(?:(\d+)m)?([\d.]+)s", re.I
 )
 
-# The free article is sold in the app as a 3 to 4 minute read, and the reading-time
-# label is computed at 200 words a minute, so the ask is 600 to 800 words. The band
-# enforced below is deliberately wider on both sides: a retry costs a whole
-# generation, so only a piece that misses the promise by a visible margin is worth
-# paying to rewrite, and a translation runs roughly a tenth longer than the English
-# it came from.
-MIN_NARRATIVE_WORDS = 480
-MAX_NARRATIVE_WORDS = 950
+# The free article is a 2 minute read, and the label the app prints is wordCount/200,
+# so the ask is 350 to 450 words. It was 600 to 800 and read as padded at that length.
+# The band enforced below is wider than the ask on both sides: a retry costs a whole
+# generation, so only a piece that misses by a visible margin is worth paying to
+# rewrite, and a translation runs roughly a tenth longer than the English it came from.
+MIN_NARRATIVE_WORDS = 280
+MAX_NARRATIVE_WORDS = 560
 
 # Push-notification limits. The title is cut on whole words and never gets an
 # ellipsis: the 9 AM notification is the one the user judges the app by, and a title
@@ -863,7 +862,7 @@ Keep the register: plain, factual, explanatory, with the same paragraph breaks. 
 summarise, do not add, do not drop anything, and do not smooth the explanations into
 vaguer language. Numbers stay as digits. Proper nouns take their standard {lang_full}
 form. Stay within a tenth of the English word count in either direction: the article is
-published as a 3 to 4 minute read in every language.
+published as a 2 minute read in every language.
 
 The notification is a push hook, not a headline, so translate its pull rather than its
 words. The title stays 5 to 8 words and at most 55 characters, and it must be a complete
@@ -965,7 +964,11 @@ Return JSON only:
         for attempt in range(1, max_retries + 1):
             prompt = f"""
 You are writing the daily article for a history app. One event, explained properly, for
-a reader who knows nothing about it and has three or four minutes. Write in {lang_full}.
+a reader who knows nothing about it and has two minutes. Write in {lang_full}.
+
+Two minutes is the whole constraint. It is not a summary and not an abstract, it is a
+short article that still explains, which means most of what you know about this event
+does not go in. Choose ruthlessly and then write those things properly.
 
 EVENT: {year} — {text}
 WIKIPEDIA: {slug}
@@ -993,9 +996,11 @@ room. Neither changes the register. Every article published today is the same ca
 factual voice; they differ in what they cover, never in how they sound.
 
 THE KEY POINTS — this is the core of the job.
-Work out first what KIND of event this is, then cover the points that kind of event
-actually turns on. A reader who finishes the article should be able to answer every one
-of them. Examples of what different kinds of event turn on:
+Work out first what KIND of event this is, then pick the THREE OR FOUR points that kind
+of event genuinely turns on, and answer those properly. Not all of them. At 400 words,
+listing six points shallowly is worse than answering three of them with real detail, and
+the reader can tell the difference immediately. Examples of what different kinds of event
+turn on, from which you choose:
 
   • A BATTLE OR MILITARY ACTION — who fought and with what numbers, the ground and the
     plan, the decision or failure that settled it, the casualties on both sides, what the
@@ -1023,25 +1028,28 @@ of them. Examples of what different kinds of event turn on:
     argued about because of it.
 
 Those are illustrations, not a form to fill in. A coronation, a strike, a trial and a
-premiere each turn on their own points. Decide which ones THIS event turns on, and answer
-those. Never print the key points as headings or bullets: they are answered inside the
-prose, in the order that makes the event make sense.
+premiere each turn on their own points. Decide which three or four THIS event turns on,
+and answer those with numbers and names. Everything you leave out was a deliberate
+choice, not an oversight. Never print the key points as headings or bullets: they are
+answered inside the prose, in the order that makes the event make sense.
 
 HOW TO WRITE IT:
-- Open with the fact that makes this event worth reading about, stated plainly. Not a
-  scene, not a rhetorical question, not the date, never "on this day".
-- Explain the mechanism. If there is engineering, law, medicine, money or military logic
-  underneath, unpack it in ordinary words. The explanation is the point of the article and
-  it is what the reader came for.
+- Open on the fact that makes this event worth reading about, stated plainly. No scene,
+  no rhetorical question, no date, never "on this day". The first sentence carries a fact.
+- Explain the one mechanism that matters. If there is engineering, law, medicine, money
+  or military logic underneath, unpack that one in ordinary words. This is what the reader
+  came for and it earns the most room in the piece.
 - Numbers as evidence, inside the sentences. "Many died" says nothing; "of the 300 who
   went in, 11 walked out" says everything. Real figures only, never rounded into vagueness.
-- Name the real people and say what each of them actually did. Quote only actual words.
-- Where historians disagree, or the record is thin, say so in one sentence and move on.
-  Never present a contested detail as settled, and never invent detail to fill a gap.
-- Close on what the event led to: a concrete consequence, not a summary and not a lesson.
+- Name the people who decided things and say what each one did. Quote only actual words.
+- If the record is thin or contested on a point you are using, say so in a clause, not a
+  paragraph. Never present a contested detail as settled, never invent detail to fill a gap.
+- Close on what the event led to: one concrete consequence, not a summary and not a lesson.
 
-RHYTHM: vary sentence length, keep paragraphs short, blank line between them. Delete any
-sentence that carries no fact the reader did not already have.
+RHYTHM: short paragraphs, blank line between them, no paragraph longer than four
+sentences. At this length there is no room for a sentence that only sets up the next one.
+Every sentence carries a fact the reader did not have. If one does not, it is cut, and
+what it was making room for gets the space instead.
 
 PUNCTUATION, and this one is not negotiable:
 NEVER use a dash as punctuation. No em dash, no en dash, no " - " standing in for a
@@ -1055,9 +1063,10 @@ BANNED PHRASES (the cliches that make every article sound the same):
 "serves as a reminder" / "stands as a testament" / "it is no coincidence" /
 "little did they know" / "on this day" / "fast forward" / "needless to say".
 
-LENGTH: 600-800 words. Aim for 700, which is the 3 to 4 minute read the app promises.
-Under 600 the event is not properly covered; over 800 it is padding. No headers.
-Paragraphs separated by blank lines.
+LENGTH: 350-450 words. Aim for 400, which is the 2 minute read the app promises. Under
+350 the event is not explained, over 450 it stops being the short piece. This is a hard
+constraint, not a target to drift past: write the article, then cut it to fit rather than
+stopping early. No headers. Paragraphs separated by blank lines.
 LANGUAGE: Entire text in {lang_full}. Zero English except proper nouns.
 
 PUSH NOTIFICATION — also write the phone notification for THIS event, in {lang_full}.
@@ -1267,7 +1276,7 @@ Translate this historical narrative AND its push notification into {lang_full}.
 Keep the register: plain, factual, explanatory. Do not smooth it into academic prose
 and do not summarise. All numbers stay as digits. Proper nouns use their standard
 {lang_full} form. Blank lines between paragraphs. Stay within a tenth of the English
-word count: the article is published as a 3 to 4 minute read in every language.
+word count: the article is published as a 2 minute read in every language.
 The notification stays a curiosity HOOK, not a label. The title is 5 to 8 words and at
 most 55 characters, a complete phrase that never trails off or ends on an ellipsis.
 The body is one sentence of at most 120 characters.
