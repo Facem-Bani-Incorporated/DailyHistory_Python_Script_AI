@@ -23,6 +23,25 @@ _RETRY_AFTER_RE = re.compile(
     r"try again in (?:(\d+)h)?(?:(\d+)m)?([\d.]+)s", re.I
 )
 
+# The free article is sold in the app as a 3 to 4 minute read, and the reading-time
+# label is computed at 200 words a minute, so the ask is 600 to 800 words. The band
+# enforced below is deliberately wider on both sides: a retry costs a whole
+# generation, so only a piece that misses the promise by a visible margin is worth
+# paying to rewrite, and a translation runs roughly a tenth longer than the English
+# it came from.
+MIN_NARRATIVE_WORDS = 480
+MAX_NARRATIVE_WORDS = 950
+
+# Push-notification limits. The title is cut on whole words and never gets an
+# ellipsis: the 9 AM notification is the one the user judges the app by, and a title
+# that trails off reads as a bug rather than as a tease. The phone appends its own
+# "..." the moment the text does not fit the line, which is the whole reason the
+# prompt asks for 5 to 8 words. The body keeps its ellipsis, because there the
+# unfinished sentence IS the hook.
+NOTIF_TITLE_MAX_WORDS = 8
+NOTIF_TITLE_MAX_CHARS = 58
+NOTIF_BODY_MAX_CHARS = 130
+
 
 def _retry_after_seconds(err: Exception) -> float | None:
     """Seconds the provider asked us to wait, or None if it did not say."""
@@ -52,36 +71,39 @@ class AIProcessor:
         self.languages = ["en", "ro", "es", "de", "fr"]
 
         # ══════════════════════════════════════════════════════════
-        # 8 storytelling angles — each specifies WHAT TYPE of number
-        # or stat to lead with. The first sentence is always a hook
-        # built around a specific figure, duration, or count.
-        # All angles anchor date+place within the first 2 sentences.
+        # 8 angles — each decides which facts the piece opens on and
+        # in what order it works through the event. They vary the
+        # SHAPE of the article, never its register: the free piece is
+        # an objective explainer whichever angle it draws. All angles
+        # anchor date and place within the first two sentences.
         # ══════════════════════════════════════════════════════════
         self.storytelling_angles = [
             {
-                "name": "SCENE_SETTING",
+                "name": "THE_SITUATION_BEFORE",
                 "instruction": (
-                    "Emphasize the physical world just before this happened. "
-                    "Put the reader in the place — the weather, the room, the street, what people could see and hear. "
-                    "Show how ordinary the moment looked before it became historic. "
-                    "Use duration and elapsed time as anchors: how long something had been building."
+                    "Lead with the state of affairs immediately before this happened. "
+                    "Who held what, what the arrangement was, what had been building and for how long. "
+                    "Establish the conditions factually, in dates, holdings and numbers, so the event reads "
+                    "as the outcome of a situation rather than as a surprise. No atmosphere, no weather, "
+                    "no imagined interiors: only what the record establishes."
                 ),
             },
             {
                 "name": "HUMAN_FOCUS",
                 "instruction": (
-                    "Center the story on the people — their ages, backgrounds, what they wanted and feared. "
-                    "Include the unknown figures present alongside the famous ones. "
-                    "Make the reader feel the human scale: this was not 'history,' it was specific people "
-                    "making specific decisions on a specific day."
+                    "Organise the article around the people: their ages, positions, and what each of them "
+                    "was actually responsible for. Include the documented minor figures alongside the famous "
+                    "ones, and say what each one did. Attribute motives only where a source records them, "
+                    "and say which source. Specific people made specific decisions; name them and the decisions."
                 ),
             },
             {
                 "name": "THE_BIG_MOMENT",
                 "instruction": (
-                    "Slow down on the exact moment itself. Use present tense. Be precise about sequence. "
-                    "What happened first, what happened next, who moved, who spoke, what was the order of events. "
-                    "If there's a known exact time, use it. The reader should feel like a witness."
+                    "Give most of the article to the event itself, in strict sequence. What happened first, "
+                    "what followed, who acted and in what order. Use exact times wherever they are recorded. "
+                    "The value here is precision about the order of events, not immediacy: reconstruct the "
+                    "sequence, do not stage it."
                 ),
             },
             {
@@ -95,19 +117,19 @@ class AIProcessor:
             {
                 "name": "THE_CONTRAST",
                 "instruction": (
-                    "Show the before and after. What did the world look like the day before this happened? "
-                    "What was normal, expected, assumed to be permanent? "
-                    "Then show how completely and quickly that changed. "
-                    "The contrast is the story — not just the event."
+                    "Build the article as a documented before and after. What the arrangement was on the "
+                    "previous day, what was assumed to be permanent, and what specifically replaced it. "
+                    "State both sides in comparable terms, the same institutions, the same borders, the same "
+                    "numbers, so the size of the change is measurable rather than asserted."
                 ),
             },
             {
                 "name": "THE_NUMBERS_TELL",
                 "instruction": (
-                    "Let measurements, statistics, and figures carry the narrative. "
-                    "Every paragraph should have at least one number that proves something. "
-                    "Not decoration — evidence. Distances, costs, casualties, durations, temperatures, ages. "
-                    "The numbers should make the scale visceral, not abstract."
+                    "Let measurements and figures carry the article. Every paragraph should hold at least one "
+                    "number that proves something: distances, costs, casualties, durations, temperatures, ages. "
+                    "Evidence, not decoration. Give the unit and the basis for every figure, and say when a "
+                    "number is an estimate and whose estimate it is."
                 ),
             },
             {
@@ -121,19 +143,22 @@ class AIProcessor:
             {
                 "name": "THE_STORY_BEHIND",
                 "instruction": (
-                    "Lead with what most people don't know about this event. "
-                    "The backstory, the hidden cause, the forgotten figure, the decision nobody remembers. "
-                    "Reframe the familiar headline with the detail that changes its meaning entirely."
+                    "Lead with the part of the record most people never hear: the underlying cause, the "
+                    "decision taken weeks earlier, the figure left out of the retellings. Then correct the "
+                    "familiar version against it, saying plainly what the popular account gets wrong and what "
+                    "the evidence actually shows."
                 ),
             },
         ]
 
         # ══════════════════════════════════════════════════════════
-        # 6 narrative VOICES — a second axis of variation, orthogonal
-        # to the angle above. The angle decides the STRUCTURE of the
-        # piece; the voice decides its PERSONALITY. Each event gets a
-        # unique (angle, voice) pair, so two articles can never read
-        # the same way even on the same day.
+        # 6 EMPHASES — a second axis of variation, orthogonal to the
+        # angle above. The angle decides what the piece leads with;
+        # the emphasis decides which facts get the most room. Neither
+        # touches the register: the free article is one calm factual
+        # voice, and two pieces on the same day differ in what they
+        # cover, not in how they sound. Each event gets a unique
+        # (angle, emphasis) pair.
         # ══════════════════════════════════════════════════════════
         self.narrative_voices = [
             {
@@ -834,13 +859,16 @@ CANDIDATES:
         prompt = f"""
 Translate this article into {lang_full}.
 
-Keep the voice: the rhythm, the short sentences, the dry irony, the paragraph breaks.
-Do not smooth it into textbook prose, do not summarise, do not add or drop anything.
-If the English uses a fragment for impact, keep the fragment. Numbers stay as digits.
-Proper nouns take their standard {lang_full} form.
+Keep the register: plain, factual, explanatory, with the same paragraph breaks. Do not
+summarise, do not add, do not drop anything, and do not smooth the explanations into
+vaguer language. Numbers stay as digits. Proper nouns take their standard {lang_full}
+form. Stay within a tenth of the English word count in either direction: the article is
+published as a 3 to 4 minute read in every language.
 
-The notification is a push hook, not a headline — translate its pull, not its words.
-Hard limits: title MAX 40 characters, body MAX 120 characters, in {lang_full}.
+The notification is a push hook, not a headline, so translate its pull rather than its
+words. The title stays 5 to 8 words and at most 55 characters, and it must be a complete
+phrase that ends on its own: never let it trail off and never end it on an ellipsis or a
+preposition. The body stays one sentence of at most 120 characters.
 
 ARTICLE:
 {english["content"]}
@@ -851,7 +879,7 @@ NOTIFICATION BODY: {english["notification_body"]}
 Return JSON only:
 {{
   "content": "the full article in {lang_full}, paragraphs separated by blank lines",
-  "notification_title": "<=40 chars in {lang_full}",
+  "notification_title": "5-8 word complete hook in {lang_full}, at most 55 chars",
   "notification_body": "<=120 chars in {lang_full}"
 }}
 """
@@ -872,7 +900,9 @@ Return JSON only:
         """
         Assign each event a unique (angle, voice) pair.
 
-        - The angle controls the STRUCTURE of the piece, the voice its PERSONALITY.
+        - The angle controls the STRUCTURE of the piece, the emphasis which facts get
+          the most room. Neither varies the register: the free article is one objective
+          explanatory voice, and two pieces differ in coverage, not in tone.
         - Seed = day + the batch's slugs, so the FREE batch and the PRO batch get
           different shuffles (no more "event 0 of both tiers gets the same angle").
         - Angles (8) and voices (6) are walked in lockstep with a uniqueness guard,
@@ -934,91 +964,123 @@ Return JSON only:
 
         for attempt in range(1, max_retries + 1):
             prompt = f"""
-You are an essayist and storyteller writing for a smart, curious reader — think of the
-popular-history writers who can make you laugh, teach you something real, and keep you
-reading to the very last line. One article, one event, around 600 words. Write in {lang_full}.
+You are writing the daily article for a history app. One event, explained properly, for
+a reader who knows nothing about it and has three or four minutes. Write in {lang_full}.
 
 EVENT: {year} — {text}
 WIKIPEDIA: {slug}
 DATE: {date_str}, {year}
 LOCATION: {location}
 
+WHAT THIS PIECE IS: an objective, accurate account of what happened, why it happened and
+what followed. Plain language, never simplified facts. Explain the way a good science
+journalist explains: precise about the substance, ordinary in the words. The reader should
+finish knowing the event, not having sat through a performance about it.
+
+WHAT THIS PIECE IS NOT: a story, an essay or a column. No scene-setting, no invented
+thoughts or dialogue, no atmosphere, no suspense, no jokes, no moral at the end. Nothing
+is dramatised and nothing is guessed at. If the record does not support it, it does not
+go in the article.
+
 STRUCTURAL LENS — {angle['name']}:
 {angle['instruction']}
 
-VOICE — {voice['name']}:
+EMPHASIS — {voice['name']}:
 {voice['instruction']}
 
-This article must NOT sound like the other pieces published the same day. Its shape comes
-from the lens; its personality comes from the voice. Make both unmistakable. If a reader saw
-two of your articles side by side, they should feel written by two different, talented people.
+The lens decides what the piece leads with, the emphasis decides which facts get the most
+room. Neither changes the register. Every article published today is the same calm,
+factual voice; they differ in what they cover, never in how they sound.
 
-TONE — the constant beneath every voice: be deeply informative first. The reader should
-finish genuinely knowing more than they did — the facts, the how, the why, delivered with
-real authority. Underneath that, run a thread of dry, intelligent irony: notice the absurd,
-the gap between what people intended and what they actually got. Let a genuinely funny line
-land RARELY — once, maybe twice in the whole piece — and only where the material earns it.
-Wit is seasoning, not the meal: if every paragraph is winking, it turns smug and exhausting.
-Most sentences do straight, substantial work; the humor is the occasional glint, never the
-point. Never force it onto tragedy. The voice above only changes HOW this is delivered.
+THE KEY POINTS — this is the core of the job.
+Work out first what KIND of event this is, then cover the points that kind of event
+actually turns on. A reader who finishes the article should be able to answer every one
+of them. Examples of what different kinds of event turn on:
+
+  • A BATTLE OR MILITARY ACTION — who fought and with what numbers, the ground and the
+    plan, the decision or failure that settled it, the casualties on both sides, what the
+    result changed on the map.
+  • A TREATY, LAW, CHARTER OR FOUNDING — the problem it was written to solve, the parties
+    and what each of them conceded, the specific terms that mattered, who was left out,
+    whether it held and for how long.
+  • A DISCOVERY, INVENTION OR SCIENTIFIC FIRST — what was believed or possible before it,
+    how the thing actually works in plain words, the evidence that convinced people, who
+    else was close, what it made possible afterwards.
+  • A DISASTER, EPIDEMIC OR ACCIDENT — the physical cause, the chain of failures that let
+    it happen, the scale in real numbers, the response at the time, and what was changed
+    afterwards to stop it happening again.
+  • A DEATH, BIRTH, ACCESSION OR SUCCESSION — who the person actually was and what they
+    controlled, the state of affairs they inherited or left behind, who took over and by
+    what right, what the handover did to the balance of power.
+  • A POLITICAL EVENT, COUP OR REVOLUTION — the grievance and who held it, the sequence of
+    the day itself, who controlled the army and the money, what the new arrangement was
+    and who ended up worse off.
+  • AN EXPLORATION, VOYAGE OR EXPEDITION — the objective and who paid for it, the route and
+    the distances, the conditions and the losses, what was actually found, and what was
+    claimed afterwards that was not true.
+  • A CULTURAL OR RELIGIOUS EVENT — what was actually produced, decided or performed, how
+    it was received at the time, the doctrine or practice that changed, and what is still
+    argued about because of it.
+
+Those are illustrations, not a form to fill in. A coronation, a strike, a trial and a
+premiere each turn on their own points. Decide which ones THIS event turns on, and answer
+those. Never print the key points as headings or bullets: they are answered inside the
+prose, in the order that makes the event make sense.
 
 HOW TO WRITE IT:
-- Open with the single most interesting thing you know about this event — a scene, a strange
-  number, a line someone actually said. Never open with the date or with "On this day."
-  The first sentence is a hook, not a header.
-- Explain what happened so clearly a curious teenager would understand it — but never talk
-  down. If there's science, engineering, or politics underneath, unpack it in plain language.
-  The explanation should be the satisfying part, not a chore.
-- Drop in one or two genuinely surprising facts — the kind of detail a reader repeats to
-  someone else the same day. Delightful trivia, not filler. Make me go "huh, I didn't know that."
-- Keep it mostly informative; let dry irony surface where the material invites it, and a
-  genuinely funny observation only once or twice in the whole piece — a wry aside, never a
-  joke pasted on. Read the room: never force humor onto tragedy, never be needlessly solemn.
-- Use real numbers as evidence, woven into the sentences, never as a list. "Many people died"
-  tells nothing; "Of the 300 who went in, 11 walked out" tells everything.
-- Name real people. Quote them when you know the actual words.
-- End on the detail that reframes the whole thing — an irony, a forgotten consequence, a twist.
-  No summary, no moral, no "and that is why." Just land the last image and stop.
+- Open with the fact that makes this event worth reading about, stated plainly. Not a
+  scene, not a rhetorical question, not the date, never "on this day".
+- Explain the mechanism. If there is engineering, law, medicine, money or military logic
+  underneath, unpack it in ordinary words. The explanation is the point of the article and
+  it is what the reader came for.
+- Numbers as evidence, inside the sentences. "Many died" says nothing; "of the 300 who
+  went in, 11 walked out" says everything. Real figures only, never rounded into vagueness.
+- Name the real people and say what each of them actually did. Quote only actual words.
+- Where historians disagree, or the record is thin, say so in one sentence and move on.
+  Never present a contested detail as settled, and never invent detail to fill a gap.
+- Close on what the event led to: a concrete consequence, not a summary and not a lesson.
 
-RHYTHM: Mix short punchy sentences with longer flowing ones. Present tense for the key moment,
-past tense for everything else. Vary paragraph length. If a sentence is boring, cut it.
+RHYTHM: vary sentence length, keep paragraphs short, blank line between them. Delete any
+sentence that carries no fact the reader did not already have.
 
 PUNCTUATION, and this one is not negotiable:
 NEVER use a dash as punctuation. No em dash, no en dash, no " - " standing in for a
 comma, a colon or a full stop. If a clause needs joining, use a comma. If it is a new
 thought, start a new sentence. A dash is only allowed inside a hyphenated compound
 (record-breaking) or a numeric range (1914-1918).
-Write to inform. Say what happened, what it meant and why it mattered, in plain
-language. No scene-setting for its own sake, no lyricism, no building atmosphere. If a
-sentence carries no fact the reader did not have, delete it.
 
-BANNED PHRASES (clichés that make every article sound the same):
+BANNED PHRASES (the cliches that make every article sound the same):
 "it is worth noting" / "history tells us" / "changed the course of history" /
 "left an indelible mark" / "without a doubt" / "subsequently" / "in conclusion" /
 "serves as a reminder" / "stands as a testament" / "it is no coincidence" /
 "little did they know" / "on this day" / "fast forward" / "needless to say".
 
-LENGTH: 500–800 words. Aim for 600. A tight 350 words beats a padded 700. No headers.
+LENGTH: 600-800 words. Aim for 700, which is the 3 to 4 minute read the app promises.
+Under 600 the event is not properly covered; over 800 it is padding. No headers.
 Paragraphs separated by blank lines.
 LANGUAGE: Entire text in {lang_full}. Zero English except proper nouns.
 
-PUSH NOTIFICATION — also write a phone notification for THIS event, in {lang_full}.
-It is a HOOK, not a label. It must spark curiosity about THIS specific event — never
-announce that the app has new content. Use the formula that works on TikTok:
-underdog/rebel vs. authority → escalation → twist, compressed into one line.
+PUSH NOTIFICATION — also write the phone notification for THIS event, in {lang_full}.
+It arrives at nine in the morning and it is the only thing standing between this article
+and being ignored. It is a HOOK, not a label, and never an announcement that the app has
+new content.
   BAD:  "Your daily event is ready!"
   BAD:  "Today in history: the French Revolution"
-  GOOD: "1793: a 24-year-old woman walks into a bathroom and changes the French Revolution."
-- notification_title: MAX 40 characters. The event's subject must be recognizable, but the
-  hook comes first — a strange number, a name, a stake. Not a headline label.
-- notification_body: MAX 120 characters. One tight line that lands the curiosity gap. Must
-  fit a push notification without truncation.
-- Both entirely in {lang_full}. No emoji.
+  GOOD: "She hid a kitchen knife under her cloak"
+- notification_title: 5 to 8 words, and at most 55 characters, so the phone shows it whole.
+  It must be a COMPLETE phrase that ends on its own: never trail off, never end on an
+  ellipsis, a dash or a preposition, never read as though it was cut short. Build it on
+  something specific and strange from THIS event, a number, a name, an object, a stake.
+  Not the event's label and not its Wikipedia title.
+- notification_body: MAX 120 characters, one sentence, and it must fit without truncation.
+  It half-answers the title so that opening the app is the only way to get the rest.
+  Every word of it is true.
+- Both entirely in {lang_full}. No emoji, no quotation marks, no hashtags.
 
 Return JSON:
 {{
-  "content": "full article here — paragraphs separated by blank lines",
-  "notification_title": "≤40 char hook title in {lang_full}",
+  "content": "full article here, paragraphs separated by blank lines",
+  "notification_title": "5-8 word complete hook in {lang_full}, at most 55 chars",
   "notification_body": "≤120 char hook body in {lang_full}"
 }}
 """
@@ -1029,7 +1091,7 @@ Return JSON:
                 {"content": ""},
                 temperature=0.8,
                 max_tokens=4096,
-                thinking_budget=0,  # creative writing gets nothing from reasoning tokens
+                thinking_budget=0,  # a 700-word explainer does not repay reasoning tokens
             )
             # The prompt forbids dashes-as-punctuation and the model still produces
             # them, so the rule is enforced here rather than hoped for.
@@ -1053,13 +1115,28 @@ Return JSON:
 
     @staticmethod
     def _clean_notification(title: str, body: str) -> dict:
-        """Trim a generated hook to push-notification limits (best-effort)."""
-        title = strip_prose_dashes((title or "").strip().strip('"'))
-        body = strip_prose_dashes((body or "").strip().strip('"'))
-        if len(title) > 45:
-            title = title[:44].rstrip() + "…"
-        if len(body) > 130:
-            body = body[:129].rstrip() + "…"
+        """Trim a generated hook to push-notification limits.
+
+        The title comes back whole or not at all: it is cut on word boundaries and
+        never carries an ellipsis, because a notification title that trails off is
+        indistinguishable from one the phone truncated. The body is allowed to end
+        on one, since a body that stops mid-thought is the hook working.
+        """
+        title = strip_prose_dashes((title or "").strip().strip('"“”'))
+        body = strip_prose_dashes((body or "").strip().strip('"“”'))
+
+        words = title.split()
+        if len(words) > NOTIF_TITLE_MAX_WORDS:
+            title = " ".join(words[:NOTIF_TITLE_MAX_WORDS])
+        while len(title) > NOTIF_TITLE_MAX_CHARS and " " in title:
+            title = title.rsplit(" ", 1)[0]
+        title = title.rstrip(" ,;:.…-–—")
+
+        if len(body) > NOTIF_BODY_MAX_CHARS:
+            body = body[:NOTIF_BODY_MAX_CHARS - 1].rstrip()
+            if " " in body:
+                body = body.rsplit(" ", 1)[0]
+            body = body.rstrip(" ,;:") + "…"
         return {"title": title, "body": body}
 
     def _validate_narrative(self, content: str, lang: str, style: dict) -> tuple:
@@ -1068,14 +1145,17 @@ Return JSON:
 
         word_count = len(content.split())
 
-        # Hard floor: anything under 200 words is a broken/truncated response → retry
+        # Anything under 200 words is a broken or truncated response rather than a
+        # brief article, and it is worth saying so separately in the log.
         if word_count < 200:
             return False, f"Too short: {word_count} words (hard min 200)"
 
-        # Soft floor: 300–500 is acceptable, just logged as a warning (no retry)
-        # Hard ceiling: above 1200 is unlikely to be tight prose → retry
-        if word_count > 1200:
-            return False, f"Too long: {word_count} words (max 1200)"
+        # The rest of the band is the 3 to 4 minute read the app promises. See
+        # MIN_NARRATIVE_WORDS for why it is wider than what the prompt asks for.
+        if word_count < MIN_NARRATIVE_WORDS:
+            return False, f"Too short: {word_count} words (min {MIN_NARRATIVE_WORDS})"
+        if word_count > MAX_NARRATIVE_WORDS:
+            return False, f"Too long: {word_count} words (max {MAX_NARRATIVE_WORDS})"
 
         # Broken/placeholder content → always retry
         bad_markers = [
@@ -1184,11 +1264,13 @@ Return JSON:
         prompt = f"""
 Translate this historical narrative AND its push notification into {lang_full}.
 
-Keep the voice — the short punchy sentences, the rhythm, the journalist tone.
-Do not smooth it into academic prose. If the English has a fragment for impact, keep the fragment.
-All numbers stay as digits. Proper nouns use their standard {lang_full} form.
-Blank lines between paragraphs. First sentence stays under 10 words.
-The notification stays a curiosity HOOK, not a label: keep title ≤40 chars, body ≤120 chars.
+Keep the register: plain, factual, explanatory. Do not smooth it into academic prose
+and do not summarise. All numbers stay as digits. Proper nouns use their standard
+{lang_full} form. Blank lines between paragraphs. Stay within a tenth of the English
+word count: the article is published as a 3 to 4 minute read in every language.
+The notification stays a curiosity HOOK, not a label. The title is 5 to 8 words and at
+most 55 characters, a complete phrase that never trails off or ends on an ellipsis.
+The body is one sentence of at most 120 characters.
 Output only in {lang_full} — no English except proper nouns.
 
 ENGLISH ARTICLE:
@@ -1200,7 +1282,7 @@ ENGLISH NOTIFICATION BODY: {en_notif.get('body', '')}
 Return JSON:
 {{
   "content": "translated narrative in {lang_full}",
-  "notification_title": "translated ≤40 char hook title",
+  "notification_title": "translated hook title, 5-8 words, at most 55 chars",
   "notification_body": "translated ≤120 char hook body"
 }}
 """

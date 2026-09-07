@@ -37,27 +37,33 @@ LANG_NAMES = {
     "fr": "French",
 }
 
-# ── Validation thresholds ─────────────────────────────────────────────
-# A floor on length is a proxy for "the generation broke", and it was set where a
-# healthy Gemini answer landed. On Groq it rejects work that is merely concise: the
-# 2026-09-02 run threw away three finished long reads at 887, 909 and 981 words, and
-# two more for chapters of 100 and 108 against a 110 floor. Every one of them was a
-# complete, readable article about a good event, discarded for falling a paragraph
-# short — and discarding it costs the event its long read entirely.
+# ── Length ─────────────────────────────────────────────────────────────
+# `_word_count` totals the chapters plus the misconception and aftermath sections, and
+# the app divides exactly that by 200 to print the reading time. The long read is sold
+# as a 7 to 8 minute read, so it has to land between 1300 and 1700 words, which leaves
+# the chapters themselves carrying roughly 220 fewer.
 #
-# The bar is now set to catch a broken generation, not a brief one. A short long read
-# on an event worth reading beats no long read at all; the interest lives in which
-# event was chosen, not in how many words it took.
-MIN_WORDS = 700           # below this the generation genuinely broke → retry
+# The floor was 700 until Sept 2026 and almost nothing was ever retried for length: the
+# 09-07 run shipped long reads of 754, 754, 1018, 1037 and 1364 words, a 4 to 7 minute
+# read against a subscription sold on 7 to 8. It now sits just under the ask, so a short
+# piece costs a retry instead of passing silently.
+#
+# Being under the floor still never loses the piece. An earlier, stricter bar discarded
+# whole finished articles for falling a paragraph short (three at 887, 909 and 981 words
+# on 2026-09-02), and losing the long read costs the event far more than its length
+# does. `_generate_english` keeps the longest of the failed attempts and ships it, so
+# the floor buys retries without ever being able to throw the work away.
+MIN_WORDS = 1300          # under this, retry for length — but never discard
+MAX_WORDS = 1900          # over this it is padding, not prose → retry
+
+# What the prompt asks of the chapters alone. The top of the band sits below MAX_WORDS
+# by about what the misconception and aftermath sections add.
+CHAPTER_WORDS_MIN = 1200
+CHAPTER_WORDS_MAX = 1450
 
 # Marks the one validation failure that is a matter of degree rather than of kind. A
 # short article is still an article; a missing misconception or an invented URL is not.
 TOO_SHORT = "Too short"
-# What the prompt asks for, kept well above the floor on purpose. Lowering the ask along
-# with the bar would make every long read shorter; the point is to keep aiming high and
-# stop throwing away the ones that land a little under.
-TARGET_WORDS = 1400
-MAX_WORDS = 3200          # above this it is padding, not prose → retry
 MIN_CHAPTERS = 4
 MAX_CHAPTERS = 7
 MIN_CHAPTER_WORDS = 80
@@ -157,9 +163,9 @@ class DeepDiveGenerator:
                 {"chapters": []},
                 temperature=0.7,
                 max_tokens=8192,
-                # Unlike the short narrative (creative, thinking_budget=0), this is
-                # dense factual work — sequencing, causation, real sources. Reasoning
-                # measurably reduces invented detail here.
+                # The free article runs at thinking_budget=0; this one is longer and
+                # denser — sequencing, causation, real sources across seven chapters —
+                # and reasoning measurably reduces invented detail at that length.
                 thinking_budget=self.thinking_budget,
             )
 
@@ -218,7 +224,10 @@ A subscriber reading both must feel they received two different articles.
         return f"""
 You are writing the long-form piece for subscribers of a history app — the kind of
 article someone reads to the end on a Sunday morning and then tells someone about.
-ONE event. {TARGET_WORDS}-2400 words total across all chapters. Write in English.
+ONE event, {CHAPTER_WORDS_MIN} to {CHAPTER_WORDS_MAX} words across the chapters. With the
+misconception and aftermath sections that comes to the 7 to 8 minute read the subscription
+promises. Under {CHAPTER_WORDS_MIN} it is not a long read, over {CHAPTER_WORDS_MAX} it is
+padding. Write in English.
 
 EVENT: {year} — {text}
 WIKIPEDIA: {slug}
