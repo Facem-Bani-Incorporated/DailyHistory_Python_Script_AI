@@ -286,6 +286,30 @@ def _deep_dive_from_db(raw) -> DeepDiveTranslations | None:
     return DeepDiveTranslations(**langs) if langs else None
 
 
+def _figure_dict(f) -> dict:
+    """One figure, flattened for the app. Empty lists are kept out of the payload so a
+    stat row does not ship an empty `points` array to every device."""
+    out = {"kind": f.kind, "title": f.title, "unit": f.unit, "note": f.note}
+    if f.stats:
+        out["stats"] = [{"value": s.value, "unit": s.unit, "label": s.label} for s in f.stats]
+    if f.points:
+        out["points"] = [{"label": p.label, "value": p.value} for p in f.points]
+    return out
+
+
+def _teaser_figure(dd) -> dict | None:
+    """The one figure a free user gets: the band of numbers, never a chart.
+
+    The band is a fact about the event; the bars are the analysis the subscription
+    pays for. Picking it here rather than in the app means the long read's other
+    figures never travel to a device that may not open them.
+    """
+    for f in dd.figures:
+        if f.kind == "stat_row" and f.stats:
+            return _figure_dict(f)
+    return None
+
+
 def _serialize_deep_dive(deep_dive) -> str | None:
     """Full long read as a JSON string for the `deep_dive` column — PRO users only.
 
@@ -302,6 +326,7 @@ def _serialize_deep_dive(deep_dive) -> str | None:
         payload[lang] = {
             "chapters": [{"title": c.title, "body": c.body} for c in dd.chapters],
             "highlights": [{"label": h.label, "text": h.text} for h in dd.highlights],
+            "figures": [_figure_dict(f) for f in dd.figures],
             "timeline": dd.timeline,
             "misconception": dd.misconception,
             "aftermath": dd.aftermath,
@@ -331,6 +356,9 @@ def _serialize_deep_dive_teaser(deep_dive) -> str | None:
             "wordCount": dd.word_count,
             "sourceCount": len(dd.sources),
         }
+        figure = _teaser_figure(dd)
+        if figure:
+            payload[lang]["figure"] = figure
     return json.dumps(payload, ensure_ascii=False) if payload else None
 
 

@@ -68,6 +68,16 @@ MIN_CHAPTER_WORDS = 80
 MIN_HIGHLIGHTS = 6
 MAX_HIGHLIGHTS = 8
 MIN_SOURCES = 3
+
+# Figures are the one place a hallucinated number would be indistinguishable from a
+# real one: prose can hedge, a bar cannot. Everything about them is optional, and the
+# shapes below are floors on being a figure at all. A stat row of one number is a
+# sentence, and a bar chart of one bar is a rectangle.
+MAX_FIGURES = 3
+MIN_STATS = 2
+MAX_STATS = 4
+MIN_BAR_POINTS = 2
+MAX_BAR_POINTS = 6
 # Opening words of chapter one, shipped to free users as the pitch. It was 70, which is
 # most of a 150-word chapter: a subscriber opening the long read would have already read
 # half of its first chapter for free.
@@ -299,6 +309,38 @@ WHAT TO PRODUCE:
    are not confident a specific work exists, name the archive or the primary document
    type instead ("the Admiralty logs held at Kew").
 
+7. FIGURES — up to {MAX_FIGURES}, and OPTIONAL. This is the only part of the piece the app
+   DRAWS rather than prints, and a drawn number cannot hedge the way a sentence can.
+   Emit a figure only for quantities you are confident sit in the historical record. If
+   you are not confident, return an empty list. An event with no dependable numbers is
+   completely normal and the app then shows nothing. Never estimate to fill this section,
+   and never carry a number here that you would have qualified in prose.
+
+   The FIRST figure should be a "stat_row" whenever the event supports one, because it is
+   the only figure a free reader ever sees. {MIN_STATS} to {MAX_STATS} numbers that give the
+   scale of the event at a glance:
+     {{"kind": "stat_row", "note": "...", "stats": [
+        {{"value": "20,000", "unit": "soldiers", "label": "the Gothic force"}},
+        {{"value": "11", "unit": "of 300", "label": "walked out"}}
+     ]}}
+   `value` is written exactly as it should appear on screen, separators included. `unit`
+   is the small line under the number and may be empty. `label` says what the number is,
+   in two to four words.
+
+   Then up to two "bar" figures, and only where the event has quantities genuinely
+   comparable on a single axis: forces on each side, casualties, costs, votes, distances,
+   tonnage, deaths per city.
+     {{"kind": "bar", "title": "Forces at Adrianople", "unit": "soldiers",
+       "note": "Ammianus' figures; modern estimates run lower",
+       "points": [{{"label": "Rome", "value": 15000}}, {{"label": "Goths", "value": 20000}}]}}
+   {MIN_BAR_POINTS} to {MAX_BAR_POINTS} points, `value` a plain number with no separators and no
+   units. Never chart one thing, never chart quantities measured in different units, and
+   never chart a trend you inferred rather than read.
+
+   `note` carries the provenance and it is NOT optional when the numbers are contested or
+   estimated. It is printed under the figure, so write it for a reader: "Ammianus'
+   estimate; modern figures run about a third lower", not "source: Ammianus".
+
 HOW TO WRITE IT:
 - Real numbers as evidence, woven into sentences. "Of the 300 who went in, 11 walked out."
 - Name real people. Quote them only when you know the actual words.
@@ -336,7 +378,11 @@ Return JSON:
   "timeline": ["14:32 — the first signal reaches Lisbon", "..."],
   "misconception": "80-150 words",
   "aftermath": ["Within a decade — ...", "..."],
-  "sources": ["Author, Title (Year)", "..."]
+  "sources": ["Author, Title (Year)", "..."],
+  "figures": [
+    {{"kind": "stat_row", "note": "", "stats": [{{"value": "20,000", "unit": "soldiers", "label": "the Gothic force"}}]}},
+    {{"kind": "bar", "title": "...", "unit": "...", "note": "...", "points": [{{"label": "...", "value": 0}}]}}
+  ]
 }}
 """
 
@@ -351,6 +397,7 @@ Return JSON:
         payload = {
             "chapters": english["chapters"],
             "highlights": english.get("highlights", []),
+            "figures": english.get("figures", []),
             "timeline": english["timeline"],
             "misconception": english["misconception"],
             "aftermath": english["aftermath"],
@@ -368,6 +415,11 @@ Timeline and aftermath markers keep their format ("14:32 — ...", "By 1961 — 
 Blank lines between paragraphs are preserved exactly.
 Output only {lang_full} — no English except proper nouns.
 
+FIGURES: translate only the words. `title`, `unit`, `note`, and the `label` of every
+stat and every bar point become {lang_full}. Every `value` is copied across untouched,
+including its digits and its thousands separators, and no figure is added, dropped or
+reordered. These are drawn as charts, so a changed number is a changed fact.
+
 SOURCES ARE NOT TRANSLATED — they are omitted from the input and re-attached afterwards.
 
 ARTICLE JSON:
@@ -376,6 +428,10 @@ ARTICLE JSON:
 Return the SAME JSON structure, with every string translated into {lang_full}:
 {{
   "chapters": [{{"title": "...", "body": "..."}}],
+  "highlights": [{{"label": "...", "text": "..."}}],
+  "figures": [{{"kind": "stat_row", "title": "...", "unit": "...", "note": "...",
+               "stats": [{{"value": "unchanged", "unit": "...", "label": "..."}}],
+               "points": [{{"label": "...", "value": "unchanged"}}]}}],
   "timeline": ["..."],
   "misconception": "...",
   "aftermath": ["..."]
@@ -394,6 +450,12 @@ Return the SAME JSON structure, with every string translated into {lang_full}:
         translated = self._normalize(res)
         # Sources are language-neutral bibliography; carry the English ones across.
         translated["sources"] = english["sources"]
+        # Figures survive translation or they do not travel at all. A translation that
+        # dropped one, added one or reordered them can no longer be matched back to the
+        # English numbers, and a chart labelled with the wrong series is worse than an
+        # English label on a correct one.
+        if len(translated.get("figures") or []) != len(english.get("figures") or []):
+            translated["figures"] = english.get("figures", [])
         translated["teaser"] = self._extract_teaser(translated["chapters"])
 
         if translated["word_count"] < MIN_WORDS * 0.6:
@@ -463,6 +525,7 @@ Return the SAME JSON structure, with every string translated into {lang_full}:
         payload = {
             "chapters": chapters,
             "highlights": highlights[:MAX_HIGHLIGHTS],
+            "figures": self._normalize_figures(res.get("figures")),
             "timeline": _str_list("timeline"),
             # Timeline and aftermath are deliberately NOT cleaned: their dash is the
             # separator in "14:32 — the first signal reaches Lisbon", which the app lays
@@ -474,6 +537,65 @@ Return the SAME JSON structure, with every string translated into {lang_full}:
         payload["word_count"] = self._word_count(payload)
         payload["teaser"] = self._extract_teaser(chapters)
         return payload
+
+    @staticmethod
+    def _normalize_figures(raw) -> list:
+        """Parse the figures block, dropping anything the app could not draw honestly.
+
+        Dropping silently is the right failure here: a malformed figure costs the
+        article nothing, and the alternative is either a retry paid for a decoration
+        or a chart drawn from a value that would not parse.
+        """
+        out = []
+        for f in (raw or [])[:MAX_FIGURES]:
+            if not isinstance(f, dict):
+                continue
+            kind = str(f.get("kind") or "").strip().lower()
+            title = strip_prose_dashes(str(f.get("title") or "").strip())
+            unit = str(f.get("unit") or "").strip()
+            note = strip_prose_dashes(str(f.get("note") or "").strip())
+
+            if kind == "bar":
+                points = []
+                for pt in (f.get("points") or []):
+                    if not isinstance(pt, dict):
+                        continue
+                    label = str(pt.get("label") or "").strip()
+                    # The prompt asks for a bare number and the model still sends
+                    # "15,000" or "15 000" about a third of the time.
+                    try:
+                        value = float(
+                            str(pt.get("value", "")).replace(",", "").replace(" ", "")
+                        )
+                    except (TypeError, ValueError):
+                        continue
+                    if label and value > 0:
+                        points.append({"label": label, "value": value})
+                if len(points) >= MIN_BAR_POINTS:
+                    out.append({
+                        "kind": "bar", "title": title, "unit": unit, "note": note,
+                        "points": points[:MAX_BAR_POINTS],
+                    })
+                continue
+
+            stats = []
+            for st in (f.get("stats") or []):
+                if not isinstance(st, dict):
+                    continue
+                value = str(st.get("value") or "").strip()
+                if not value:
+                    continue
+                stats.append({
+                    "value": value,
+                    "unit": str(st.get("unit") or "").strip(),
+                    "label": strip_prose_dashes(str(st.get("label") or "").strip()),
+                })
+            if len(stats) >= MIN_STATS:
+                out.append({
+                    "kind": "stat_row", "title": title, "unit": "", "note": note,
+                    "stats": stats[:MAX_STATS],
+                })
+        return out
 
     @staticmethod
     def _word_count(payload: dict) -> int:

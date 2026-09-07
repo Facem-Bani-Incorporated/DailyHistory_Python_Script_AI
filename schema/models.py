@@ -84,6 +84,40 @@ class DeepDiveHighlight(BaseModel):
     text: str = ""
 
 
+class FigureStat(BaseModel):
+    """One number in the band above the article.
+
+    `value` is a string, not a number: "20,000", "6 h" and "1 in 300" all have to
+    survive to the screen exactly as written, and the app never does arithmetic on it.
+    """
+    value: str = ""    # "11", "20,000", "6 h"
+    unit: str = ""     # "of 300", "soldiers" -- the small line under the number
+    label: str = ""    # "walked out" -- what the number is
+
+
+class FigureBarPoint(BaseModel):
+    """One bar. `value` IS numeric here, because the bar's length is drawn from it."""
+    label: str = ""
+    value: float = 0.0
+
+
+class Figure(BaseModel):
+    """A chart or a band of numbers, drawn by the app above or inside the article.
+
+    Figures are the one place in the pipeline where a hallucinated number would be
+    indistinguishable from a real one: prose hedges, a bar chart does not. So the
+    generator is told to omit a figure rather than estimate it, `note` carries the
+    provenance to the screen, and everything here is optional at every level. An event
+    with no dependable numbers ships no figure and the app renders nothing.
+    """
+    kind: str = "stat_row"                    # "stat_row" | "bar"
+    title: str = ""
+    unit: str = ""                            # axis unit for a bar: "soldiers", "GBP"
+    note: str = ""                            # "Ammianus' estimate; figures vary"
+    stats: List[FigureStat] = []              # kind == "stat_row"
+    points: List[FigureBarPoint] = []         # kind == "bar"
+
+
 class DeepDive(BaseModel):
     """The long-form PRO narrative for one event, in one language.
 
@@ -94,6 +128,9 @@ class DeepDive(BaseModel):
     """
     chapters: List[DeepDiveChapter] = []
     highlights: List[DeepDiveHighlight] = []   # points of interest, above the article
+    # Numbers worth drawing. The first stat_row also travels in the teaser, so free
+    # users get one figure without the long read itself leaking.
+    figures: List[Figure] = []
     timeline: List[str] = []      # "14:32 — the first signal reaches Lisbon"
     misconception: str = ""       # "what everyone gets wrong about this day"
     aftermath: List[str] = []     # consequences at +10y / +50y / +100y
