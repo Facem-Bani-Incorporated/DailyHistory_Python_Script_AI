@@ -77,7 +77,7 @@ MIN_SOURCES = 3
 # real one: prose can hedge, a bar cannot. Everything about them is optional, and the
 # shapes below are floors on being a figure at all. A stat row of one number is a
 # sentence, and a bar chart of one bar is a rectangle.
-MAX_FIGURES = 4
+MAX_FIGURES = 5
 MIN_STATS = 2
 MAX_STATS = 4
 MIN_BAR_POINTS = 2
@@ -85,6 +85,14 @@ MAX_BAR_POINTS = 6
 MIN_GRID_ROWS = 4
 MAX_GRID_ROWS = 8
 MAX_GRID_VALUE_CHARS = 64
+MIN_TABLE_COLUMNS = 2
+MAX_TABLE_COLUMNS = 3
+MIN_TABLE_ROWS = 3
+MAX_TABLE_ROWS = 7
+MAX_CELL_CHARS = 28
+MIN_SHARE_SLICES = 2
+MAX_SHARE_SLICES = 5
+GUESS_OPTIONS = 3
 # Opening words of chapter one, shipped to free users as the pitch. It was 70, which is
 # most of a 150-word chapter: a subscriber opening the long read would have already read
 # half of its first chapter for free.
@@ -322,9 +330,11 @@ WHAT TO PRODUCE:
    are not confident a specific work exists, name the archive or the primary document
    type instead ("the Admiralty logs held at Kew").
 
-7. FIGURES — up to {MAX_FIGURES}. These, with the highlights, ARE the piece: they are what
-   the reader sees first and what they remember. Aim for three on any event with a decent
-   record, and start with the fact grid, which almost every event supports.
+7. FIGURES — up to {MAX_FIGURES}. These, with the highlights, ARE the piece: they are what the
+   reader sees first and what they remember, and the prose is now folded away behind its
+   chapter titles until they ask for it. Aim for four on any event with a decent record:
+   the fact grid, which almost every event supports, one chart, one comparison, and the
+   guess at the end.
 
    This is the only part the app DRAWS rather than prints, and a drawn number cannot hedge
    the way a sentence can.
@@ -372,6 +382,37 @@ WHAT TO PRODUCE:
      {{"kind": "compare", "title": "Eastern field army", "note": "Ammianus' figures",
        "stats": [{{"value": "20,000", "unit": "before", "label": "Summer 378"}},
                  {{"value": "6,000", "unit": "after", "label": "Winter 378"}}]}}
+
+   A "table" compares two or three parties across several dimensions, which a grid
+   cannot do. {MIN_TABLE_COLUMNS} to {MAX_TABLE_COLUMNS} columns, {MIN_TABLE_ROWS} to {MAX_TABLE_ROWS} rows, every cell
+   under {MAX_CELL_CHARS} characters because a phone gives it one narrow column. Use it for two
+   sides of a battle, the parties to a treaty, candidates in an election, ships in a
+   race. Every row must have a value for every column, so pick dimensions the record
+   covers on both sides.
+     {{"kind": "table", "title": "The two armies", "columns": ["Rome", "Goths"],
+       "rows": [{{"label": "Forces", "cells": ["15,000", "20,000"]}},
+                {{"label": "Cavalry", "cells": ["2,000", "5,000"]}},
+                {{"label": "Commander", "cells": ["Valens", "Fritigern"]}}]}}
+
+   A "share" is one whole broken into its parts, drawn as a single divided bar:
+   {MIN_SHARE_SLICES} to {MAX_SHARE_SLICES} slices whose values are shares of the SAME total. What an army was
+   made of, what people died of, how a vote split. Values are plain numbers and the app
+   turns them into percentages, so they must genuinely add up to the whole.
+     {{"kind": "share", "title": "What the army was made of", "unit": "men",
+       "points": [{{"label": "Infantry", "value": 9000}}, {{"label": "Cavalry", "value": 4000}},
+                  {{"label": "Auxiliaries", "value": 2000}}]}}
+
+   A "guess" hides ONE number behind three choices, and it is the only figure the
+   reader touches. Include one whenever the event has a figure that is genuinely
+   surprising, which is most of them. The point is that the true answer is hard to
+   pick: the two wrong options must be plausible, in the same units and the same order
+   of magnitude, never absurd. `reveal` is 25-45 words saying what the answer means,
+   not restating it.
+     {{"kind": "guess", "title": "", "question": "Of the 300 who entered the fort, how many walked out?",
+       "options": ["11", "87", "154"], "answer_index": 0,
+       "reveal": "Eleven. The rest were still under the east wall when the 1903 excavation reached it, which is how the number is known at all."}}
+   Put the guess LAST in the figures list: it works as the thing that stops a reader
+   who is scrolling past the end.
 
    `note` carries the provenance and it is NOT optional when the numbers are contested or
    estimated. It is printed under the figure, so write it for a reader: "Ammianus'
@@ -421,7 +462,10 @@ Return JSON:
     {{"kind": "fact_grid", "title": "...", "rows": [{{"label": "...", "value": "..."}}]}},
     {{"kind": "stat_row", "note": "", "stats": [{{"value": "20,000", "unit": "soldiers", "label": "the Gothic force"}}]}},
     {{"kind": "bar", "title": "...", "unit": "...", "note": "...", "points": [{{"label": "...", "value": 0}}]}},
-    {{"kind": "compare", "title": "...", "note": "...", "stats": [{{"value": "...", "unit": "before", "label": "..."}}, {{"value": "...", "unit": "after", "label": "..."}}]}}
+    {{"kind": "compare", "title": "...", "note": "...", "stats": [{{"value": "...", "unit": "before", "label": "..."}}, {{"value": "...", "unit": "after", "label": "..."}}]}},
+    {{"kind": "table", "title": "...", "columns": ["...", "..."], "rows": [{{"label": "...", "cells": ["...", "..."]}}]}},
+    {{"kind": "share", "title": "...", "unit": "...", "points": [{{"label": "...", "value": 0}}]}},
+    {{"kind": "guess", "question": "...", "options": ["...", "...", "..."], "answer_index": 0, "reveal": "..."}}
   ]
 }}
 """
@@ -458,11 +502,19 @@ Output only {lang_full} — no English except proper nouns.
 FIGURES: no figure is added, dropped or reordered, and the `kind` of each stays exactly
 as it is. `title`, `unit`, `note` and every `label` become {lang_full}.
 
-Values split in two. In a "stat_row", a "compare" and a "bar", `value` is a measurement:
-copy it across untouched, digits and thousands separators included, because these are
-drawn as charts and a changed number is a changed fact. In a "fact_grid", `value` is a
-short piece of prose ("15,000 Roman against 20,000 Gothic") and IS translated, keeping
-its numbers as digits.
+Values split in two. In a "stat_row", a "compare", a "bar" and a "share", `value` is a
+measurement: copy it across untouched, digits and thousands separators included, because
+these are drawn as charts and a changed number is a changed fact. In a "fact_grid",
+`value` is a short piece of prose ("15,000 Roman against 20,000 Gothic") and IS
+translated, keeping its numbers as digits.
+
+In a "table", `columns` and every row `label` are translated. A `cells` entry is
+translated only where it is words ("Six hours"); a figure or a proper name is copied
+across as it stands.
+
+In a "guess", `question` and `reveal` are translated. `options` are copied across
+untouched, in the SAME ORDER, and `answer_index` keeps its exact value. Reordering the
+options or shifting the index would mark the true answer wrong in front of the reader.
 
 SOURCES ARE NOT TRANSLATED — they are omitted from the input and re-attached afterwards.
 
@@ -476,7 +528,10 @@ Return the SAME JSON structure, with every string translated into {lang_full}:
   "figures": [{{"kind": "same as input", "title": "...", "unit": "...", "note": "...",
                "stats": [{{"value": "unchanged", "unit": "...", "label": "..."}}],
                "points": [{{"label": "...", "value": "unchanged"}}],
-               "rows": [{{"label": "...", "value": "translated"}}]}}],
+               "rows": [{{"label": "...", "value": "translated", "cells": ["..."]}}],
+               "columns": ["translated"],
+               "question": "translated", "options": ["unchanged"],
+               "answer_index": 0, "reveal": "translated"}}],
   "timeline": ["..."],
   "misconception": "...",
   "aftermath": ["..."]
@@ -600,7 +655,7 @@ Return the SAME JSON structure, with every string translated into {lang_full}:
             unit = str(f.get("unit") or "").strip()
             note = strip_prose_dashes(str(f.get("note") or "").strip())
 
-            if kind == "bar":
+            if kind in ("bar", "share"):
                 points = []
                 for pt in (f.get("points") or []):
                     if not isinstance(pt, dict):
@@ -616,10 +671,70 @@ Return the SAME JSON structure, with every string translated into {lang_full}:
                         continue
                     if label and value > 0:
                         points.append({"label": label, "value": value})
-                if len(points) >= MIN_BAR_POINTS:
+                # A share is slices of one whole, so its floor and ceiling differ
+                # from a bar chart's: two slices is a split, six is a pie nobody can
+                # read on a phone.
+                floor = MIN_SHARE_SLICES if kind == "share" else MIN_BAR_POINTS
+                ceiling = MAX_SHARE_SLICES if kind == "share" else MAX_BAR_POINTS
+                if len(points) >= floor:
                     out.append({
-                        "kind": "bar", "title": title, "unit": unit, "note": note,
-                        "points": points[:MAX_BAR_POINTS],
+                        "kind": kind, "title": title, "unit": unit, "note": note,
+                        "points": points[:ceiling],
+                    })
+                continue
+
+            if kind == "table":
+                columns = [
+                    strip_prose_dashes(str(c).strip())
+                    for c in (f.get("columns") or [])
+                    if str(c).strip()
+                ][:MAX_TABLE_COLUMNS]
+                rows = []
+                for r in (f.get("rows") or []):
+                    if not isinstance(r, dict):
+                        continue
+                    label = strip_prose_dashes(str(r.get("label") or "").strip())
+                    cells = [
+                        strip_prose_dashes(str(c).strip())[:MAX_CELL_CHARS]
+                        for c in (r.get("cells") or [])
+                    ]
+                    # A row missing a cell would draw a table with a hole in it, and
+                    # the hole reads as a fact ("they had none") rather than as an
+                    # omission. Dropping the row is the honest failure.
+                    if label and len(cells) >= len(columns) and all(cells[:len(columns)]):
+                        rows.append({"label": label, "cells": cells[:len(columns)]})
+                if len(columns) >= MIN_TABLE_COLUMNS and len(rows) >= MIN_TABLE_ROWS:
+                    out.append({
+                        "kind": "table", "title": title, "unit": "", "note": note,
+                        "columns": columns, "rows": rows[:MAX_TABLE_ROWS],
+                    })
+                continue
+
+            if kind == "guess":
+                question = strip_prose_dashes(str(f.get("question") or "").strip())
+                options = [
+                    strip_prose_dashes(str(o).strip())
+                    for o in (f.get("options") or [])
+                    if str(o).strip()
+                ]
+                reveal = strip_prose_dashes(str(f.get("reveal") or "").strip())
+                try:
+                    answer = int(f.get("answer_index", -1))
+                except (TypeError, ValueError):
+                    answer = -1
+                # Every part has to be present. A guess with no reveal is a quiz
+                # question, and one with an out-of-range answer would mark the true
+                # option wrong in front of the reader.
+                if (
+                    question and reveal
+                    and len(options) == GUESS_OPTIONS
+                    and len(set(options)) == GUESS_OPTIONS
+                    and 0 <= answer < GUESS_OPTIONS
+                ):
+                    out.append({
+                        "kind": "guess", "title": title, "unit": "", "note": note,
+                        "question": question, "options": options,
+                        "answer_index": answer, "reveal": reveal,
                     })
                 continue
 

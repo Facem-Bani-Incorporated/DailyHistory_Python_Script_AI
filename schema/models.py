@@ -102,9 +102,15 @@ class FigureBarPoint(BaseModel):
 
 
 class FigureRow(BaseModel):
-    """One line of the fact grid: the event's spec sheet, read at a glance."""
-    label: str = ""    # "Forces", "Duration", "Outcome"
-    value: str = ""    # kept short; the app gives it one line
+    """One line of a fact grid or a comparison table.
+
+    Two shapes in one model because they are the same row seen from two angles: the
+    grid uses `value` (one column), the table uses `cells` (one per column). Keeping
+    them apart would mean two near-identical models and two near-identical parsers.
+    """
+    label: str = ""              # "Forces", "Duration", "Outcome"
+    value: str = ""              # fact_grid: kept short, the app gives it one line
+    cells: List[str] = []        # table: one entry per column, same order
 
 
 class Figure(BaseModel):
@@ -116,15 +122,27 @@ class Figure(BaseModel):
     provenance to the screen, and everything here is optional at every level. An event
     with no dependable numbers ships no figure and the app renders nothing.
     """
-    kind: str = "stat_row"                    # stat_row | bar | fact_grid | compare
+    kind: str = "stat_row"   # stat_row | bar | fact_grid | compare | table | share | guess
     title: str = ""
     unit: str = ""                            # axis unit for a bar: "soldiers", "GBP"
     note: str = ""                            # "Ammianus' estimate; figures vary"
     # `stats` serves two kinds: a band of 2-4 numbers, or exactly 2 for a
     # before/after comparison. Same shape, different arrangement on screen.
     stats: List[FigureStat] = []              # kind == "stat_row" | "compare"
-    points: List[FigureBarPoint] = []         # kind == "bar"
-    rows: List[FigureRow] = []                # kind == "fact_grid"
+    # `points` likewise: bars measured against the largest, or slices of one whole.
+    points: List[FigureBarPoint] = []         # kind == "bar" | "share"
+    rows: List[FigureRow] = []                # kind == "fact_grid" | "table"
+    columns: List[str] = []                   # kind == "table", headers left to right
+
+    # ── The guess ──────────────────────────────────────────────────────────
+    # One number from the event, hidden behind three choices. It is the only figure
+    # the reader touches, and the only one that can be wrong in an interesting way:
+    # being surprised by the answer is the point, so the options are chosen to make
+    # the true one hard to pick rather than obvious.
+    question: str = ""                        # kind == "guess"
+    options: List[str] = []                   # exactly 3, one of them true
+    answer_index: int = -1                    # 0-based index into `options`
+    reveal: str = ""                          # what the answer means, 25-45 words
 
 
 class DeepDive(BaseModel):

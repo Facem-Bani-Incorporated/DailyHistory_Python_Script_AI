@@ -295,7 +295,19 @@ def _figure_dict(f) -> dict:
     if f.points:
         out["points"] = [{"label": p.label, "value": p.value} for p in f.points]
     if f.rows:
-        out["rows"] = [{"label": r.label, "value": r.value} for r in f.rows]
+        out["rows"] = [
+            {"label": r.label, "value": r.value, **({"cells": r.cells} if r.cells else {})}
+            for r in f.rows
+        ]
+    if f.columns:
+        out["columns"] = f.columns
+    if f.kind == "guess":
+        out.update({
+            "question": f.question,
+            "options": f.options,
+            "answerIndex": f.answer_index,
+            "reveal": f.reveal,
+        })
     return out
 
 
