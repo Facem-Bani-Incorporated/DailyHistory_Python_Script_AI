@@ -294,6 +294,8 @@ def _figure_dict(f) -> dict:
         out["stats"] = [{"value": s.value, "unit": s.unit, "label": s.label} for s in f.stats]
     if f.points:
         out["points"] = [{"label": p.label, "value": p.value} for p in f.points]
+    if f.rows:
+        out["rows"] = [{"label": r.label, "value": r.value} for r in f.rows]
     return out
 
 
@@ -307,6 +309,15 @@ def _teaser_figure(dd) -> dict | None:
     for f in dd.figures:
         if f.kind == "stat_row" and f.stats:
             return _figure_dict(f)
+    # Since the long read became mostly structure, a piece often has no stat row at
+    # all: the numbers went into the fact grid instead. Rather than leave the free
+    # article with nothing drawn on it, the grid stands in, trimmed to four rows so
+    # the subscriber still has the rest.
+    for f in dd.figures:
+        if f.kind == "fact_grid" and len(f.rows) >= 2:
+            out = _figure_dict(f)
+            out["rows"] = out["rows"][:4]
+            return out
     return None
 
 

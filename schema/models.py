@@ -101,8 +101,14 @@ class FigureBarPoint(BaseModel):
     value: float = 0.0
 
 
+class FigureRow(BaseModel):
+    """One line of the fact grid: the event's spec sheet, read at a glance."""
+    label: str = ""    # "Forces", "Duration", "Outcome"
+    value: str = ""    # kept short; the app gives it one line
+
+
 class Figure(BaseModel):
-    """A chart or a band of numbers, drawn by the app above or inside the article.
+    """A chart, a band of numbers or a fact grid, drawn by the app.
 
     Figures are the one place in the pipeline where a hallucinated number would be
     indistinguishable from a real one: prose hedges, a bar chart does not. So the
@@ -110,12 +116,15 @@ class Figure(BaseModel):
     provenance to the screen, and everything here is optional at every level. An event
     with no dependable numbers ships no figure and the app renders nothing.
     """
-    kind: str = "stat_row"                    # "stat_row" | "bar"
+    kind: str = "stat_row"                    # stat_row | bar | fact_grid | compare
     title: str = ""
     unit: str = ""                            # axis unit for a bar: "soldiers", "GBP"
     note: str = ""                            # "Ammianus' estimate; figures vary"
-    stats: List[FigureStat] = []              # kind == "stat_row"
+    # `stats` serves two kinds: a band of 2-4 numbers, or exactly 2 for a
+    # before/after comparison. Same shape, different arrangement on screen.
+    stats: List[FigureStat] = []              # kind == "stat_row" | "compare"
     points: List[FigureBarPoint] = []         # kind == "bar"
+    rows: List[FigureRow] = []                # kind == "fact_grid"
 
 
 class DeepDive(BaseModel):

@@ -37,31 +37,35 @@ LANG_NAMES = {
     "fr": "French",
 }
 
-# ── Length ─────────────────────────────────────────────────────────────
+# ── Length ───────────────────────────────────────────────────────
 # `_word_count` totals the chapters plus the misconception and aftermath sections, and
-# the app divides exactly that by 200 to print the reading time. The long read is a 4 to
-# 4.5 minute read, so it lands between 750 and 1050 words, with the chapters carrying
-# roughly 220 fewer than that.
+# the app divides exactly that by 200 to print the reading time.
 #
-# What PRO buys here is density, not duration. The tier was briefly pushed to 1300-1900
-# words on the theory that a subscription should buy a longer article, and the result
-# read as padded: more paragraphs saying the same things the free piece already said.
-# The weight now sits in the highlights, which are the part a subscriber actually reads
-# first, and the chapters only explain what will not fit in one.
-MIN_WORDS = 750           # under this, retry for length — but never discard
-MAX_WORDS = 1050          # over this it is padding, not prose → retry
+# This section has been cut twice. It ran at 1300-1900 words on the theory that a
+# subscription should buy a longer article, then at 750-1050, and the verdict on both
+# was the same: scrolling it is boring. The problem was never the minute count, it was
+# that the whole thing was prose. So the prose is now the small part. The highlights,
+# the fact grid, the charts and the timeline carry the event; the chapters explain only
+# what a structured block cannot hold.
+#
+# Being under the floor still never loses the piece. An earlier, stricter bar discarded
+# whole finished articles for falling a paragraph short (three at 887, 909 and 981 words
+# on 2026-09-02). `_generate_english` keeps the longest of the failed attempts and ships
+# it, so the floor buys retries without ever being able to throw the work away.
+MIN_WORDS = 380           # under this, retry for length — but never discard
+MAX_WORDS = 700           # over this it is padding, not prose → retry
 
 # What the prompt asks of the chapters alone. The top of the band sits below MAX_WORDS
 # by about what the misconception and aftermath sections add.
-CHAPTER_WORDS_MIN = 550
-CHAPTER_WORDS_MAX = 700
+CHAPTER_WORDS_MIN = 200
+CHAPTER_WORDS_MAX = 330
 
 # Marks the one validation failure that is a matter of degree rather than of kind. A
 # short article is still an article; a missing misconception or an invented URL is not.
 TOO_SHORT = "Too short"
-MIN_CHAPTERS = 4
-MAX_CHAPTERS = 5
-MIN_CHAPTER_WORDS = 80
+MIN_CHAPTERS = 2
+MAX_CHAPTERS = 3
+MIN_CHAPTER_WORDS = 70
 # Points of interest shown above the article, and the part of the long read a subscriber
 # reads first. They carry the facts now: 3-5 of them left the prose doing work a list
 # does better, so the count went up as the chapters came down.
@@ -73,15 +77,18 @@ MIN_SOURCES = 3
 # real one: prose can hedge, a bar cannot. Everything about them is optional, and the
 # shapes below are floors on being a figure at all. A stat row of one number is a
 # sentence, and a bar chart of one bar is a rectangle.
-MAX_FIGURES = 3
+MAX_FIGURES = 4
 MIN_STATS = 2
 MAX_STATS = 4
 MIN_BAR_POINTS = 2
 MAX_BAR_POINTS = 6
+MIN_GRID_ROWS = 4
+MAX_GRID_ROWS = 8
+MAX_GRID_VALUE_CHARS = 64
 # Opening words of chapter one, shipped to free users as the pitch. It was 70, which is
 # most of a 150-word chapter: a subscriber opening the long read would have already read
 # half of its first chapter for free.
-TEASER_WORDS = 45
+TEASER_WORDS = 35
 MAX_OVERLAP = 0.12        # 8-gram overlap with the free narrative
 
 BAD_MARKERS = [
@@ -235,15 +242,19 @@ of yours would not surprise someone who just read it, cut the sentence.
 """
 
         return f"""
-You are writing the subscriber piece for a history app. What the subscription buys is
-DENSITY, not length: more facts, more specifics, more of what the free article had no room
-for, in fewer words than a general-interest feature would take. Somebody who pays should
-finish it knowing things nobody else knows, not having read for longer.
+You are building the subscriber BRIEFING for a history app. Not an essay, not a feature:
+a briefing, of the kind someone reads standing up and comes away able to repeat. It is
+mostly structure. Facts, numbers, a grid, a comparison, a timeline. The prose is the
+connective tissue between them and it is deliberately the smallest part.
 
-ONE event, {CHAPTER_WORDS_MIN} to {CHAPTER_WORDS_MAX} words across the chapters. That is
-short on purpose. The highlights carry the facts; the chapters exist to explain the things
-a highlight cannot hold. Over {CHAPTER_WORDS_MAX} you are padding, and padding is the one
-thing a subscriber notices. Write in English.
+Assume the reader will SCAN before they read. Everything that can be a number, a row or a
+bar must be one, because that is what survives a scan. Only what genuinely needs a
+paragraph to make sense gets a paragraph.
+
+ONE event, {CHAPTER_WORDS_MIN} to {CHAPTER_WORDS_MAX} words across ALL chapters combined.
+That is roughly one screen of text in the whole piece, and it is the constraint that
+forces the facts into the structured blocks where they belong. Over {CHAPTER_WORDS_MAX}
+you are writing an article again. Write in English.
 
 EVENT: {year} — {text}
 WIKIPEDIA: {slug}
@@ -253,12 +264,14 @@ LOCATION: {location}
 WHAT TO PRODUCE:
 
 1. CHAPTERS — {MIN_CHAPTERS} to {MAX_CHAPTERS} of them, each with a real title and around
-   150 words. Titles are hooks, not labels: "The Order That Was Never Sent", not
-   "Background". Each chapter does distinct work — the mechanism, the moment, the people,
-   the consequence. Never summarize the previous chapter, and never restate a highlight:
-   if a fact fits in a highlight it belongs there, and the chapter takes what needs
-   explaining instead. A chapter that could be replaced by its own first sentence is one
-   chapter too many, so write four good ones rather than five thin ones.
+   100 words. Titles are hooks, not labels: "The Order That Was Never Sent", not
+   "Background". Two good chapters beat three thin ones.
+
+   A chapter earns its place only by explaining something that CANNOT be a row in the
+   grid, a bar on a chart or a line in the timeline. Causation, mechanism, why a decision
+   made sense to the people making it: those need sentences. Who, how many, when and what
+   it cost do not, and if you find yourself writing one of those into a paragraph, delete
+   the sentence and put the fact in a figure instead.
 
 2. HIGHLIGHTS — {MIN_HIGHLIGHTS} to {MAX_HIGHLIGHTS} of them, and the most important thing
    you produce. They sit above the article and they are what a subscriber reads first, so
@@ -309,8 +322,12 @@ WHAT TO PRODUCE:
    are not confident a specific work exists, name the archive or the primary document
    type instead ("the Admiralty logs held at Kew").
 
-7. FIGURES — up to {MAX_FIGURES}, and OPTIONAL. This is the only part of the piece the app
-   DRAWS rather than prints, and a drawn number cannot hedge the way a sentence can.
+7. FIGURES — up to {MAX_FIGURES}. These, with the highlights, ARE the piece: they are what
+   the reader sees first and what they remember. Aim for three on any event with a decent
+   record, and start with the fact grid, which almost every event supports.
+
+   This is the only part the app DRAWS rather than prints, and a drawn number cannot hedge
+   the way a sentence can.
    Emit a figure only for quantities you are confident sit in the historical record. If
    you are not confident, return an empty list. An event with no dependable numbers is
    completely normal and the app then shows nothing. Never estimate to fill this section,
@@ -337,6 +354,25 @@ WHAT TO PRODUCE:
    units. Never chart one thing, never chart quantities measured in different units, and
    never chart a trend you inferred rather than read.
 
+   A "fact_grid" is the event's specification sheet and the most broadly useful figure
+   here: {MIN_GRID_ROWS} to {MAX_GRID_ROWS} rows, each a short label and a short value. Choose the
+   labels to fit the event, the way the highlight labels are chosen. A battle wants Who
+   fought, Forces, Ground, Duration, Casualties, Outcome. A treaty wants Parties, Signed,
+   Terms, Enforced by, Held until. A discovery wants Who, Where, Method, Confirmed by,
+   Superseded. Values stay under {MAX_GRID_VALUE_CHARS} characters, because each one gets a
+   single line on a phone.
+     {{"kind": "fact_grid", "title": "The event in brief", "rows": [
+        {{"label": "Forces", "value": "15,000 Roman against 20,000 Gothic"}},
+        {{"label": "Duration", "value": "One afternoon, roughly six hours"}}
+     ]}}
+
+   A "compare" is a before and after, and it is the figure that makes a consequence
+   land. EXACTLY two entries in `stats`, measured the same way, so the change is the
+   point:
+     {{"kind": "compare", "title": "Eastern field army", "note": "Ammianus' figures",
+       "stats": [{{"value": "20,000", "unit": "before", "label": "Summer 378"}},
+                 {{"value": "6,000", "unit": "after", "label": "Winter 378"}}]}}
+
    `note` carries the provenance and it is NOT optional when the numbers are contested or
    estimated. It is printed under the figure, so write it for a reader: "Ammianus'
    estimate; modern figures run about a third lower", not "source: Ammianus".
@@ -348,9 +384,11 @@ HOW TO WRITE IT:
   The explanation should be the most satisfying part, never a chore.
 - Vary paragraph and sentence length. If a sentence is boring, cut it.
 - No headers inside chapter bodies. Paragraphs separated by blank lines.
-- At this length every paragraph has to earn its place against a highlight. Before you
-  keep one, ask whether the same fact would land harder as a highlight, and if it would,
-  move it there.
+- Every paragraph competes with a figure for the reader's attention, and the figure
+  usually wins. Before keeping a sentence, ask whether its fact would land harder as a
+  grid row, a bar or a highlight. If it would, move it and delete the sentence.
+- The timeline is a visual element, not a summary: give it {MIN_GRID_ROWS} or more entries with
+  real markers so it reads as a spine down the page.
 
 PUNCTUATION, and this one is not negotiable:
 NEVER use a dash as punctuation. No em dash, no en dash, no " - " standing in for a
@@ -380,8 +418,10 @@ Return JSON:
   "aftermath": ["Within a decade — ...", "..."],
   "sources": ["Author, Title (Year)", "..."],
   "figures": [
+    {{"kind": "fact_grid", "title": "...", "rows": [{{"label": "...", "value": "..."}}]}},
     {{"kind": "stat_row", "note": "", "stats": [{{"value": "20,000", "unit": "soldiers", "label": "the Gothic force"}}]}},
-    {{"kind": "bar", "title": "...", "unit": "...", "note": "...", "points": [{{"label": "...", "value": 0}}]}}
+    {{"kind": "bar", "title": "...", "unit": "...", "note": "...", "points": [{{"label": "...", "value": 0}}]}},
+    {{"kind": "compare", "title": "...", "note": "...", "stats": [{{"value": "...", "unit": "before", "label": "..."}}, {{"value": "...", "unit": "after", "label": "..."}}]}}
   ]
 }}
 """
@@ -415,10 +455,14 @@ Timeline and aftermath markers keep their format ("14:32 — ...", "By 1961 — 
 Blank lines between paragraphs are preserved exactly.
 Output only {lang_full} — no English except proper nouns.
 
-FIGURES: translate only the words. `title`, `unit`, `note`, and the `label` of every
-stat and every bar point become {lang_full}. Every `value` is copied across untouched,
-including its digits and its thousands separators, and no figure is added, dropped or
-reordered. These are drawn as charts, so a changed number is a changed fact.
+FIGURES: no figure is added, dropped or reordered, and the `kind` of each stays exactly
+as it is. `title`, `unit`, `note` and every `label` become {lang_full}.
+
+Values split in two. In a "stat_row", a "compare" and a "bar", `value` is a measurement:
+copy it across untouched, digits and thousands separators included, because these are
+drawn as charts and a changed number is a changed fact. In a "fact_grid", `value` is a
+short piece of prose ("15,000 Roman against 20,000 Gothic") and IS translated, keeping
+its numbers as digits.
 
 SOURCES ARE NOT TRANSLATED — they are omitted from the input and re-attached afterwards.
 
@@ -429,9 +473,10 @@ Return the SAME JSON structure, with every string translated into {lang_full}:
 {{
   "chapters": [{{"title": "...", "body": "..."}}],
   "highlights": [{{"label": "...", "text": "..."}}],
-  "figures": [{{"kind": "stat_row", "title": "...", "unit": "...", "note": "...",
+  "figures": [{{"kind": "same as input", "title": "...", "unit": "...", "note": "...",
                "stats": [{{"value": "unchanged", "unit": "...", "label": "..."}}],
-               "points": [{{"label": "...", "value": "unchanged"}}]}}],
+               "points": [{{"label": "...", "value": "unchanged"}}],
+               "rows": [{{"label": "...", "value": "translated"}}]}}],
   "timeline": ["..."],
   "misconception": "...",
   "aftermath": ["..."]
@@ -578,6 +623,22 @@ Return the SAME JSON structure, with every string translated into {lang_full}:
                     })
                 continue
 
+            if kind == "fact_grid":
+                rows = []
+                for r in (f.get("rows") or []):
+                    if not isinstance(r, dict):
+                        continue
+                    label = strip_prose_dashes(str(r.get("label") or "").strip())
+                    value = strip_prose_dashes(str(r.get("value") or "").strip())
+                    if label and value:
+                        rows.append({"label": label, "value": value[:MAX_GRID_VALUE_CHARS]})
+                if len(rows) >= MIN_GRID_ROWS:
+                    out.append({
+                        "kind": "fact_grid", "title": title, "unit": "", "note": note,
+                        "rows": rows[:MAX_GRID_ROWS],
+                    })
+                continue
+
             stats = []
             for st in (f.get("stats") or []):
                 if not isinstance(st, dict):
@@ -590,6 +651,18 @@ Return the SAME JSON structure, with every string translated into {lang_full}:
                     "unit": str(st.get("unit") or "").strip(),
                     "label": strip_prose_dashes(str(st.get("label") or "").strip()),
                 })
+
+            if kind == "compare":
+                # A comparison is exactly two measurements of the same thing. Three of
+                # them is a bar chart and one is a statistic, and neither reads as a
+                # before and after, which is the only thing this figure draws.
+                if len(stats) == 2:
+                    out.append({
+                        "kind": "compare", "title": title, "unit": unit, "note": note,
+                        "stats": stats,
+                    })
+                continue
+
             if len(stats) >= MIN_STATS:
                 out.append({
                     "kind": "stat_row", "title": title, "unit": "", "note": note,
