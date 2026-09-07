@@ -1337,12 +1337,19 @@ async def backfill_deep_dives(from_date: str, to_date: str, limit: int) -> None:
 #   - If today AND tomorrow already have events → only process day+2
 #   - Otherwise → process all 3 days (each in REFRESH or INITIAL as needed)
 # DAY_OFFSET env var overrides auto-detection (0/1/2 = specific day only).
+# SKIP_SOCIAL suppresses the social post, which otherwise fires on offset 0 and
+# makes re-running today to pick up a prompt change publish it a second time.
 # ══════════════════════════════════════════════════════════════════
 async def main():
     import os
 
     today = datetime.now()
     day_labels = {0: "TODAY", 1: "TOMORROW", 2: "DAY AFTER"}
+
+    # Any non-empty value turns off the social post for this run.
+    skip_social = bool(os.environ.get("SKIP_SOCIAL"))
+    if skip_social:
+        logger.info("🔇 SKIP_SOCIAL set — the social agent will not run")
 
     day_offset_env = os.environ.get("DAY_OFFSET")
     if day_offset_env is not None:
@@ -1402,7 +1409,10 @@ async def main():
             processor=processor,
             quiz_gen=quiz_gen,
             ranker=ranker,
-            run_social=(i == 0),
+            # Offset 0 is the only day that posts to social, and re-running today to
+            # pick up a prompt change would post it a second time. SKIP_SOCIAL exists
+            # so regenerating a day is never coupled to publishing it again.
+            run_social=(i == 0 and not skip_social),
             refresh_mode=already_populated,
         )
 
