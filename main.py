@@ -1446,11 +1446,18 @@ async def main():
 
     day_offset_env = os.environ.get("DAY_OFFSET")
     if day_offset_env is not None:
-        # Manual override via env var
+        # Manual override. Accepts a list ("0,1,2") as well as a single offset: every
+        # day written before a fix needs rewriting, and asking for one run per day is
+        # how a repair turns into three separate runs and three separate waits.
         try:
-            offset = int(day_offset_env)
-            dates_to_process = [(offset, today + timedelta(days=offset))]
-            logger.info(f"🚀 Pipeline — manual override DAY_OFFSET={offset}")
+            offsets = [int(part) for part in day_offset_env.replace(" ", "").split(",") if part]
+            if not offsets:
+                raise ValueError("no offsets")
+            dates_to_process = [(o, today + timedelta(days=o)) for o in offsets]
+            logger.info(
+                f"🚀 Pipeline — manual override DAY_OFFSET={day_offset_env} → "
+                + ", ".join(str(d.date()) for _, d in dates_to_process)
+            )
         except ValueError:
             logger.warning(f"⚠️ Invalid DAY_OFFSET='{day_offset_env}' — using auto-detect")
             day_offset_env = None
