@@ -30,11 +30,19 @@ PRO_CATEGORIES = {
 
 
 class Translations(BaseModel):
-    en: str = "Data pending"
-    ro: str = "Data pending"
-    es: str = "Data pending"
-    de: str = "Data pending"
-    fr: str = "Data pending"
+    """Per-language strings. The default is empty, deliberately.
+
+    It used to be "Data pending", which meant any dict missing a language silently
+    filled it with that text, and the app printed it as the story. An empty string
+    hits the client's own "no story available" fallback instead, and callers that
+    care about a missing language now check for it rather than shipping a placeholder
+    dressed as content.
+    """
+    en: str = ""
+    ro: str = ""
+    es: str = ""
+    de: str = ""
+    fr: str = ""
 
 
 def _empty_translations() -> "Translations":

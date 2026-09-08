@@ -1163,6 +1163,15 @@ async def _build_event_details(
             continue
 
         narrative_data = narratives_map.get(f"EVENT_{idx}", {})
+        # No English story means the narrative stage produced nothing for this index.
+        # It used to ship anyway and the app printed the Translations default,
+        # "Data pending", as the article. An event with no story is not an event.
+        if len(str(narrative_data.get("en") or "").split()) < 50:
+            logger.error(
+                f"🚨 [{tier_tag.upper()}] Dropping '{slug}': no English narrative "
+                f"({len(str(narrative_data.get('en') or '').split())} words)."
+            )
+            continue
         titles = _usable_titles(item)
         event_quiz = quizzes[idx] if idx < len(quizzes) else None
 
