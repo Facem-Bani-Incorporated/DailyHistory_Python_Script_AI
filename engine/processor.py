@@ -216,7 +216,7 @@ class AIProcessor:
     def _get_month_day(self, target_date: datetime) -> tuple:
         return target_date.month, target_date.day
 
-    def _ensure_langs(self, data: dict, fallback_text: str = "Data pending") -> dict:
+    def _ensure_langs(self, data: dict, fallback_text: str) -> dict:
         if not isinstance(data, dict):
             data = {}
         return {lang: data.get(lang) or fallback_text for lang in self.languages}
@@ -698,7 +698,9 @@ CANDIDATES:
             item = id_map[original_id]
             item.update({
                 "deep_score": entry.get("deep_score", 50),
-                "titles": self._ensure_langs(entry.get("titles", {})),
+                "titles": self._ensure_langs(
+                    entry.get("titles", {}), self._title_from_slug(item)
+                ),
                 "is_pro": True,
             })
             selected.append(item)
@@ -721,7 +723,7 @@ CANDIDATES:
                 cand, cand_id = remaining[0]
                 cand.update({
                     "deep_score": cand.get("ai_score", 50),
-                    "titles": self._ensure_langs({}),
+                    "titles": self._ensure_langs({}, self._title_from_slug(cand)),
                     "is_pro": True,
                 })
                 selected.append(cand)
@@ -798,7 +800,15 @@ CANDIDATES:
 {candidates_text}
 """
 
-        res = await self._safe_ai_call(prompt, "Deep Rank", {"top15": []})
+        # 15 entries, each carrying a score breakdown and five translated titles,
+        # is roughly 3000 tokens of JSON. It ran on the 4096 default and truncated:
+        # json_repair then closed the braces on a half-written list, the surviving
+        # entries came back without their `titles` object, and every FREE event on
+        # the day fell through to the placeholder at once. A whole day with no
+        # titles is what that looks like from the app.
+        res = await self._safe_ai_call(
+            prompt, "Deep Rank", {"top15": []}, max_tokens=8192
+        )
         id_map = {f"ID_{i}": e for i, e in enumerate(candidates)}
 
         enriched = []
@@ -809,7 +819,13 @@ CANDIDATES:
                 item.update({
                     "deep_score": entry.get("deep_score", 50),
                     "score_breakdown": entry.get("score_breakdown", {}),
-                    "titles": self._ensure_langs(entry.get("titles", {})),
+                    # The FREE path. When deep ranking answers without a `titles`
+                    # object, every free event on the day used to become
+                    # "Data pending" at once, which is what an entire day with no
+                    # titles looks like.
+                    "titles": self._ensure_langs(
+                        entry.get("titles", {}), self._title_from_slug(item)
+                    ),
                 })
                 enriched.append(item)
         return enriched
