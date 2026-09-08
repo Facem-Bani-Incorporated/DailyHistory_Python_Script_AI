@@ -221,6 +221,21 @@ class AIProcessor:
             data = {}
         return {lang: data.get(lang) or fallback_text for lang in self.languages}
 
+    @staticmethod
+    def _title_from_slug(item: dict) -> str:
+        """The Wikipedia title, humanised, as the last-resort event title.
+
+        "Data pending" used to be that last resort, and events shipped with it as
+        their headline in all five languages. The slug is always present, it is the
+        real name of the thing, and an untranslated real name beats a placeholder in
+        every language including English.
+        """
+        slug = str(item.get("slug") or "").strip()
+        if slug:
+            return slug.replace("_", " ")
+        text = str(item.get("text") or "").strip()
+        return text[:80] if text else "Historical Event"
+
     def _normalize_location(self, e: dict) -> dict:
         loc = e.get("location")
         if isinstance(loc, str) and loc.strip().lower() in ("null", "none", "", "n/a"):
@@ -629,7 +644,9 @@ CANDIDATES:
             item = id_map[original_id]
             item.update({
                 "deep_score": entry.get("deep_score", 50),
-                "titles": self._ensure_langs(entry.get("titles", {})),
+                "titles": self._ensure_langs(
+                    entry.get("titles", {}), self._title_from_slug(item)
+                ),
                 "is_pro": True,
             })
             selected.append(item)
@@ -652,7 +669,7 @@ CANDIDATES:
                 if cand_id and cand_id not in seen_ids:
                     cand.update({
                         "deep_score": cand.get("ai_score", 50),
-                        "titles": self._ensure_langs({}),
+                        "titles": self._ensure_langs({}, self._title_from_slug(cand)),
                         "is_pro": True,
                     })
                     selected.append(cand)
@@ -1334,6 +1351,13 @@ Return JSON:
     # TITLE TRANSLATION VERIFICATION
     # ══════════════════════════════════════════════════════════════
     async def verify_and_fix_titles(self, events: list) -> list:
+        """Re-translate any title that came back missing or placeholder.
+
+        Costs nothing on a healthy batch: a repair task is only created for an event
+        that actually has a gap. It was written, never wired into main.py, and
+        "Data pending" reached production as a headline for months as a result. It is
+        now called before every `_build_event_details`.
+        """
         repair_tasks = []
         for idx, item in enumerate(events):
             titles = item.get("titles", {})

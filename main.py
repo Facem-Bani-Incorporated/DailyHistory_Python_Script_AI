@@ -5,6 +5,7 @@ import hashlib
 import time
 import base64
 import json
+import calendar
 from datetime import datetime, timedelta
 
 from core.logger import setup_logger
@@ -111,11 +112,15 @@ def _db_row_to_event_detail(row: dict) -> EventDetail:
         year = int(event_date.year) if hasattr(event_date, "year") else 0
     except Exception:
         year = 0
+    # Rows already in the database carry a real date; this only reshapes it.
+    iso_date = (
+        event_date.isoformat() if hasattr(event_date, "isoformat") else str(event_date or "")
+    )
 
     return EventDetail(
         category=category_enum,
         year=year,
-        event_date=event_date,
+        event_date=iso_date,
         source_url=str(row.get("source_url") or ""),
         title_translations=Translations(
             en=str(title_data.get("en") or ""),
@@ -514,6 +519,59 @@ def _serialize_quiz(quiz) -> dict | None:
     return result
 
 
+_PLACEHOLDER_TITLES = {"", "event", "data pending", "historical event", "untitled"}
+
+
+def _usable_titles(item: dict) -> dict:
+    """Titles with every placeholder replaced by the event's real name.
+
+    Every path into the payload converges here, which is the point: the repair pass
+    upstream can fail, be skipped for budget, or simply not have been called, and this
+    is the line that stops "Data pending" from being printed as a headline. The
+    Wikipedia slug is untranslated, so a repaired title is still much better, but it
+    names the actual event in every language.
+    """
+    titles = item.get("titles") or {}
+    fallback = str(item.get("slug") or "").replace("_", " ").strip()
+    if not fallback:
+        fallback = str(item.get("text") or "").strip()[:80] or "Historical Event"
+
+    out = {}
+    for lang in ("en", "ro", "es", "de", "fr"):
+        value = str(titles.get(lang) or "").strip()
+        out[lang] = fallback if value.lower() in _PLACEHOLDER_TITLES else value
+    return out
+
+
+def _iso_event_date(target_date, year) -> str | None:
+    """The event's date as a signed ISO string, or None when the year is unusable.
+
+    This used to be `today.date().replace(year=year) if year > 0 else today.date()`,
+    and that `else` was the whole bug: a BC event, or one whose year never parsed,
+    shipped stamped with the current year. Wrong in the story header, wrong in the
+    timeline, wrong in every sort, and indistinguishable from a genuine 2026 event.
+    Returning None so the caller drops the event is the honest outcome. One event
+    fewer is a better day than one event lying about when it happened.
+
+    The sign follows the historical convention Wikipedia's feed uses (44 BC arrives as
+    -44), not astronomical numbering. Nothing downstream does arithmetic on it, and the
+    app renders the absolute value with a BC label, so the two agree end to end.
+    """
+    try:
+        y = int(year)
+    except (TypeError, ValueError):
+        return None
+    if y == 0:
+        return None
+
+    month, day = target_date.month, target_date.day
+    # The anniversary of 29 February in a non-leap year. Falling back to the 28th keeps
+    # the event; dropping it would lose every 29 February story in three years out of four.
+    if month == 2 and day == 29 and not calendar.isleap(y):
+        day = 28
+    return f"{'-' if y < 0 else ''}{abs(y):04d}-{month:02d}-{day:02d}"
+
+
 def _dedupe_by_slug(events: list, label: str = "") -> list:
     """Remove same-slug duplicates within a single list. Keeps first occurrence."""
     seen_slugs = set()
@@ -547,7 +605,7 @@ async def send_to_java(payload: DailyPayload):
             "narrativeTranslations": ev.narrative_translations.model_dump(),
             "notificationTitleTranslations": ev.notification_title_translations.model_dump(),
             "notificationBodyTranslations": ev.notification_body_translations.model_dump(),
-            "eventDate": ev.event_date.isoformat(),
+            "eventDate": ev.event_date,
             "impactScore": float(ev.impact_score),
             "sourceUrl": str(ev.source_url),
             "pageViews30d": int(ev.page_views_30d),
@@ -792,6 +850,7 @@ async def run_free_pipeline(
         new_details: list = []
         if high_quality:
             logger.info("✍️ FREE REFRESH — Generating narratives for new events...")
+            await processor.verify_and_fix_titles(high_quality)
             narratives_map = await processor.generate_secondary_narratives(high_quality, today)
             logger.info("🧠📚🌌 FREE REFRESH — Quizzes, long reads and the game, together...")
             quizzes, deep_dives, parallel = await _enrich(
@@ -829,6 +888,8 @@ async def run_free_pipeline(
         logger.info(f"  {i+1}. [{ev['year']}] {ev['text'][:80]} → {ev['final_score']}")
 
     logger.info("✍️ FREE — Generating narratives...")
+    # Costs nothing unless a title actually came back missing or placeholder.
+    await processor.verify_and_fix_titles(selected)
     narratives_map = await processor.generate_secondary_narratives(selected, today)
 
     logger.info("🧠📚🌌 FREE — Quizzes, long reads and the game, together...")
@@ -978,6 +1039,7 @@ async def run_pro_pipeline(
         new_details: list = []
         if high_quality:
             logger.info("✍️ PRO REFRESH — Generating narratives for new events...")
+            await processor.verify_and_fix_titles(high_quality)
             narratives_map = await processor.generate_secondary_narratives(high_quality, today)
             logger.info("🧠📚🌌 PRO REFRESH — Quizzes, long reads and the game, together...")
             quizzes, deep_dives, parallel = await _enrich(
@@ -1010,6 +1072,7 @@ async def run_pro_pipeline(
         )
 
     logger.info("✍️ PRO — Generating narratives...")
+    await processor.verify_and_fix_titles(pro_selected)
     narratives_map = await processor.generate_secondary_narratives(pro_selected, today)
 
     logger.info("🧠📚🌌 PRO — Quizzes, long reads and the game, together...")
@@ -1085,13 +1148,22 @@ async def _build_event_details(
                     logger.info(f"  → Uploaded via Cloudinary: {img_url[:70]}")
                 await asyncio.sleep(0.5)
 
-        try:
-            ev_date = today.date().replace(year=year) if year > 0 else today.date()
-        except ValueError:
-            ev_date = today.date()
+        ev_date = _iso_event_date(today, year)
+        if ev_date is not None and ev_date.startswith("-"):
+            # First BC event since dates became strings. Java's LocalDate and Postgres
+            # both take the signed ISO form, but this run is the first to prove it, so
+            # the log says which event to look at if the POST is rejected.
+            logger.warning(f"🏛️ BC date emitted for '{slug}': {ev_date}")
+        if ev_date is None:
+            logger.error(
+                f"🚨 [{tier_tag.upper()}] Dropping '{slug}': unusable year {year!r}. "
+                f"An event with no year cannot be dated, and stamping it with today's "
+                f"is how the Ides of March used to ship as 2026."
+            )
+            continue
 
         narrative_data = narratives_map.get(f"EVENT_{idx}", {})
-        titles = item.get("titles", {lang: "Historical Event" for lang in ["en", "ro", "es", "de", "fr"]})
+        titles = _usable_titles(item)
         event_quiz = quizzes[idx] if idx < len(quizzes) else None
 
         # Per-language notification hooks stashed on the item by the narrative generator.

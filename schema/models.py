@@ -286,7 +286,11 @@ class DeepDiveTranslations(BaseModel):
 class EventDetail(BaseModel):
     category: EventCategory
     year: int
-    event_date: date
+    # A string, not a `date`. Python's `datetime.date` cannot hold a year below 1, so
+    # every BC event failed to build one and silently fell back to today, shipping the
+    # Ides of March stamped 2026. Java's LocalDate and Postgres both accept the signed
+    # ISO form ("-0044-03-15"), and the app already reads it (utils/year.ts).
+    event_date: str = Field(pattern=r"^-?\d{4}-\d{2}-\d{2}$")
     source_url: str
     title_translations: Translations
     narrative_translations: Translations
