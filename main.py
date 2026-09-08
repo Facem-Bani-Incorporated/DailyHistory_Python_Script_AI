@@ -1470,6 +1470,27 @@ async def main():
             "🚀 Pipeline — auto-detect will process: "
             + ", ".join(f"{day_labels[i]}({d.date()})" for i, d in dates_to_process)
         )
+        # Skipping a covered day is correct and it is also the single most confusing
+        # thing this script does: a run started to pick up a prompt change writes only
+        # day+2, and the day on screen is untouched. Say so at the top, in the terms
+        # someone reading the log actually wants.
+        skipped = [
+            (i, today + timedelta(days=i))
+            for i in range(3)
+            if i not in [j for j, _ in dates_to_process]
+        ]
+        if skipped:
+            names = ", ".join(f"{day_labels[i]} ({d.date()})" for i, d in skipped)
+            logger.warning(
+                f"⚠️ NOT regenerating {names} — those days already have events. "
+                f"A prompt or code change will NOT appear there. To rewrite one, set "
+                f"DAY_OFFSET={skipped[0][0]} (and SKIP_SOCIAL=1 so it is not posted twice)."
+            )
+
+    logger.info(
+        "📆 This run will write: "
+        + ", ".join(str(d.date()) for _, d in dates_to_process)
+    )
 
     scraper = WikiScraper()
     processor = AIProcessor()
