@@ -28,7 +28,7 @@ _RETRY_AFTER_RE = re.compile(
 # The band enforced below is wider than the ask on both sides: a retry costs a whole
 # generation, so only a piece that misses by a visible margin is worth paying to
 # rewrite, and a translation runs roughly a tenth longer than the English it came from.
-MIN_NARRATIVE_WORDS = 280
+MIN_NARRATIVE_WORDS = 260
 MAX_NARRATIVE_WORDS = 560
 
 # Push-notification limits. The title is cut on whole words and never gets an
@@ -419,7 +419,11 @@ ONLY HIGH confidence.
         # per-minute budget, and this prompt's ~4.5k of input leaves only so much room
         # under an 8000 TPM tier. Twenty-five events fit in well under 3k of JSON.
         res = await self._safe_ai_call(
-            prompt, f"Discovery ({date_str})", {"events": []}, max_tokens=3072
+            # 3072 truncated every run: the model was still writing the candidate
+            # list when the ceiling cut it, json_repair closed the braces, and the
+            # day was selected from whatever fragment survived. max_tokens is a
+            # ceiling, not a charge, so raising it costs nothing on a normal answer.
+            prompt, f"Discovery ({date_str})", {"events": []}, max_tokens=8192
         )
         events = res.get("events", [])
 
@@ -498,7 +502,11 @@ ALLOWED: {pro_cats}
 """
 
         res = await self._safe_ai_call(
-            prompt, f"PRO Discovery ({date_str})", {"events": []}, max_tokens=3072
+            # Same ceiling, worse consequence: PRO discovery returns more candidates
+            # than FREE, so it truncated into unparseable JSON on all three attempts
+            # and fell through to the raw OTD feed, which is how a day ended up with
+            # two arbitrary 2024 obituaries as its PRO content.
+            prompt, f"PRO Discovery ({date_str})", {"events": []}, max_tokens=8192
         )
         events = res.get("events", [])
 

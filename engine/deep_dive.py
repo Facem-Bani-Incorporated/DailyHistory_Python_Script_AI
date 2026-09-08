@@ -52,7 +52,12 @@ LANG_NAMES = {
 # whole finished articles for falling a paragraph short (three at 887, 909 and 981 words
 # on 2026-09-02). `_generate_english` keeps the longest of the failed attempts and ships
 # it, so the floor buys retries without ever being able to throw the work away.
-MIN_WORDS = 380           # under this, retry for length — but never discard
+# Set to 380 when the section was cut to a briefing, which was above what the new
+# prompt actually produces: the 09-10 run landed 303, 312, 315, 319, 322, 349, 355,
+# 372 and 378, so nearly every long read burned three generations and shipped the
+# best one anyway. The floor belongs below the distribution, not through the middle
+# of it, and shorter is the direction this section is meant to go.
+MIN_WORDS = 300           # under this, retry for length — but never discard
 MAX_WORDS = 700           # over this it is padding, not prose → retry
 
 # What the prompt asks of the chapters alone. The top of the band sits below MAX_WORDS
